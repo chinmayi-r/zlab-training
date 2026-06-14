@@ -1,0 +1,27 @@
+#!/bin/bash
+#SBATCH --job-name=nanovllm-preempt
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=32G
+#SBATCH --gres=gpu:1
+#SBATCH --time=01:00:00
+#SBATCH --partition=mig
+#SBATCH --output=preempt_%j.out
+
+module load anaconda3/2024.2
+conda activate nanovllm
+cd "$SLURM_SUBMIT_DIR"
+
+MODEL=~/huggingface/Qwen3-0.6B
+
+# Sweep N under tight memory so preemption is forced. If preempt=0 everywhere,
+# lower --gpu-mem-util (e.g. 0.20) and resubmit.
+python exp_preempt.py \
+    --model "$MODEL" \
+    --n 4 8 16 32 64 96 \
+    --gpu-mem-util 0.30 \
+    --prompt-tokens 600 \
+    --max-tokens 600 \
+    --out results.csv \
+    --verbose

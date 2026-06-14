@@ -6,12 +6,19 @@ Training materials and weekly reports for the [Princeton ZLab Warmup Program](ht
 
 ```
 nano-vllm/
-├── report.md       # full code walkthrough + theory (Days 1–8)
-└── experiments.md  # step-by-step experiment scripts for Adroit
+├── report.md            # the report: one question (KV-cache preemption cost), traced through the code
+├── setup.md             # Adroit setup + the flash-attn install fix
+└── experiments/
+    ├── README.md        # the experiment: what it measures, how to run, how to read results
+    ├── exp_preempt.py   # instrumented driver (monkeypatches nano-vllm; never edits the repo)
+    └── run_preempt.slurm
 ```
 
 ## Reports
 
-| Week | Topic | Folder |
-|------|-------|--------|
-| 1–2 | nano-vllm: inference systems deep dive | `nano-vllm/` |
+| Week | Question | Folder |
+|------|----------|--------|
+| 1–2 | nano-vllm: what does it cost when the KV cache runs out mid-generation? | `nano-vllm/` |
+
+The report follows the warmup-program style: not "I ran inference", but one
+question traced to the bottom of the code, with a hypothesis tested by experiment.
