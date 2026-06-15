@@ -107,18 +107,38 @@ def build_unique_prompts(llm, n, prompt_tokens):
     return prompts
 
 
-def run_one(model, n, gpu_mem_util, prompt_tokens, max_tokens,
-            max_num_seqs, max_model_len, verbose):
-    STATS.reset()
-    STATS.verbose = verbose
-
-    llm = LLM(
+def build_llm(model, gpu_mem_util, max_num_seqs, max_model_len):
+    return LLM(
         model,
         enforce_eager=True,            # avoid CUDA-graph capture noise during a stress test
         gpu_memory_utilization=gpu_mem_util,
         max_num_seqs=max_num_seqs,
         max_model_len=max_model_len,
     )
+
+
+def reset_prefix_cache(llm):
+    """Clear cross-run prefix-cache state so each N is measured in isolation.
+
+    nano-vllm initializes a global process group in ModelRunner.__init__ and never
+    tears it down, so we build ONE LLM and reuse it for every N. But after a
+    generate() completes, all blocks are freed yet their content hashes linger in
+    hash_to_block_id (deallocate never clears them). Without this reset, the
+    repeated "Request 0..k" prompts across different N values would produce
+    prefix-cache hits unrelated to preemption and pollute the recovery measurement.
+    """
+    bm = llm.scheduler.block_manager
+    bm.hash_to_block_id.clear()
+    for blk in bm.blocks:
+        blk.hash = -1
+        blk.token_ids = []
+
+
+def measure_n(llm, n, gpu_mem_util, prompt_tokens, max_tokens, verbose):
+    STATS.reset()
+    STATS.verbose = verbose
+    reset_prefix_cache(llm)
+
     num_blocks = len(llm.scheduler.block_manager.blocks)
 
     prompts = build_unique_prompts(llm, n, prompt_tokens)
@@ -159,7 +179,6 @@ def run_one(model, n, gpu_mem_util, prompt_tokens, max_tokens,
           f"wall={row['wall_s']:7.2f}s "
           f"tok/s={row['throughput_tok_s']:7.1f}")
 
-    del llm
     torch.cuda.empty_cache()
     return row
 
@@ -188,11 +207,17 @@ def main():
           f"max_tokens={args.max_tokens}")
     print(f"# sweeping N over {args.n}\n")
 
+    # Build the engine ONCE (nano-vllm can't re-init its process group) and reuse
+    # it for every N. max_num_seqs must admit the largest N so they all decode
+    # concurrently and can actually exhaust the cache.
+    max_num_seqs = max(args.max_num_seqs, max(args.n))
+    llm = build_llm(model, args.gpu_mem_util, max_num_seqs, args.max_model_len)
+
     rows = []
     for n in args.n:
-        rows.append(run_one(
-            model, n, args.gpu_mem_util, args.prompt_tokens, args.max_tokens,
-            args.max_num_seqs, args.max_model_len, args.verbose,
+        rows.append(measure_n(
+            llm, n, args.gpu_mem_util, args.prompt_tokens, args.max_tokens,
+            args.verbose,
         ))
 
     with open(args.out, "w", newline="") as f:
