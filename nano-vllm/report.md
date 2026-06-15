@@ -392,12 +392,12 @@ Gate admission on a **global reserved-blocks counter** (worst-case
 
 | N | optimistic wall / tok/s | conservative wall / tok/s | conservative preemptions |
 |---|--------------------------|----------------------------|--------------------------|
-| 4 | 17.52 / 137 | 15.25 / 157 | 0 |
-| 8 | 13.96 / 344 | 13.90 / 345 | 0 |
-| 16 | 13.93 / 689 | 13.84 / 694 | 0 |
-| 32 | 18.26 / 1052 | **29.82 / 644** | 0 |
-| 64 | 28.79 / 1334 | **41.86 / 917** | 0 |
-| 96 | 42.59 / 1353 | **55.77 / 1033** | 0 |
+| 4 | 17.56 / 137 | 15.31 / 157 | 0 |
+| 8 | 14.09 / 341 | 13.99 / 343 | 0 |
+| 16 | 14.03 / 684 | 13.92 / 690 | 0 |
+| 32 | 18.46 / 1040 | **29.97 / 641** | 0 |
+| 64 | 29.20 / 1315 | **41.80 / 919** | 0 |
+| 96 | 43.02 / 1339 | **55.14 / 1045** | 0 |
 
 **Result: it does exactly what it promises — zero preemptions at every N — and is
 strictly *slower* for it.** Below saturation (N≤16) the two are identical; once the
@@ -417,9 +417,9 @@ Swap `scheduler.running` for a deque whose `.pop()` evicts the fewest-token requ
 
 | N | LIFO preempt (uniq) | cheapest preempt (uniq) | LIFO wall / tok/s | cheapest wall / tok/s |
 |---|---------------------|--------------------------|-------------------|-----------------------|
-| 32 | 5 (5) | 4 (4) | 18.26 / 1052 | 18.20 / 1055 |
-| 64 | 26 (23) | 22 (21) | 28.79 / 1334 | 28.65 / 1340 |
-| 96 | 35 (32) | 38 (34) | 42.59 / 1353 | 42.43 / 1358 |
+| 32 | 5 (5) | 4 (4) | 18.46 / 1040 | 18.03 / 1065 |
+| 64 | 26 (23) | 22 (21) | 29.20 / 1315 | 28.58 / 1344 |
+| 96 | 35 (32) | 38 (34) | 43.02 / 1339 | 42.24 / 1364 |
 
 **Result: outcome (i) — the policies are indistinguishable** in wall-clock and
 throughput. This confirms the prediction that for a *uniform* workload "newest" ≈
@@ -437,10 +437,10 @@ non-uniform workloads, which motivates 5C.
 
 | policy | group | frac evicted | mean latency (s) | max latency (s) |
 |--------|-------|--------------|------------------|-----------------|
-| LIFO | short | 0% | 3.64 | 3.64 |
-| LIFO | long | 12% | 25.36 | 29.02 |
+| LIFO | short | 0% | 3.59 | 3.59 |
+| LIFO | long | 12% | 25.13 | 28.79 |
 | cheapest | short | 0% | 3.58 | 3.58 |
-| cheapest | long | 12% | 25.04 | 28.68 |
+| cheapest | long | 12% | 25.10 | 28.75 |
 
 **Results:**
 1. **The eviction burden falls entirely on long requests** — 0% of short requests
@@ -451,8 +451,8 @@ non-uniform workloads, which motivates 5C.
    requests** — confirmed.
 2. **But most of the latency gap is inherent, not eviction-induced.** Long requests
    take ~25 s vs ~3.6 s mostly because they generate 10× more tokens. Eviction adds
-   only a modest tail: evicted long requests reach ~29 s vs a ~24.8 s median — a
-   ~4–5 s penalty on the unlucky 12%. Eviction worsens long-request tail latency
+   only a modest tail: evicted long requests reach ~28.8 s vs a ~24.6 s median — a
+   ~4 s penalty on the unlucky 12%. Eviction worsens long-request tail latency
    but is not the main driver of the short/long gap.
 3. **Changing the policy doesn't fix fairness.** LIFO and cheapest give
    near-identical eviction rates and latencies, because in this mix the long
