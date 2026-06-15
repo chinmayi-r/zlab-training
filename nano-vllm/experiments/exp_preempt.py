@@ -34,6 +34,7 @@ Tips to actually trigger preemption:
 import argparse
 import csv
 import time
+from collections import deque
 
 import torch
 
@@ -117,6 +118,71 @@ def build_llm(model, gpu_mem_util, max_num_seqs, max_model_len):
     )
 
 
+# ----------------------------------------------------------------------------
+# Follow-up knobs (still no edits to the repo — we patch the live instances)
+# ----------------------------------------------------------------------------
+class CheapestDeque(deque):
+    """A running-queue whose .pop() evicts the CHEAPEST-to-redo sequence (fewest
+    total tokens) instead of the newest. In scheduler.py, .pop() is used in exactly
+    one place — the eviction at line 62 `self.preempt(self.running.pop())` — so
+    swapping the deque changes the eviction policy without touching schedule().
+    Every other operation (popleft/append/extendleft/remove) is inherited."""
+    def pop(self):
+        victim = min(self, key=lambda s: s.num_tokens)
+        self.remove(victim)
+        return victim
+
+
+def install_policy(llm, policy):
+    """policy='lifo' (default nano-vllm) or 'cheapest' (fewest-token victim)."""
+    if policy == "cheapest":
+        llm.scheduler.running = CheapestDeque(llm.scheduler.running)
+    return policy
+
+
+def install_admission(llm, mode):
+    """mode='optimistic' (default) or 'conservative'.
+
+    Conservative admission reserves WORST-CASE blocks (prompt + max_tokens) for
+    every live request, so the sum of reservations never exceeds the cache. Because
+    current allocation <= reservation for every seq, a running seq that crosses a
+    block boundary always finds a free block -> preemption can never happen. The
+    per-seq check alone is not enough: already-running seqs keep growing into the
+    free pool, so the reservation must be a GLOBAL running counter."""
+    if mode != "conservative":
+        return mode
+    bm = llm.scheduler.block_manager
+    total = len(bm.blocks)
+    bm._reserved = 0
+    bsz = bm.block_size
+    orig_can_allocate = bm.can_allocate
+    orig_allocate = bm.allocate
+    orig_deallocate = bm.deallocate
+
+    def worst_case(seq):
+        return (seq.num_prompt_tokens + seq.max_tokens + bsz - 1) // bsz
+
+    def can_allocate(seq):
+        if bm._reserved + worst_case(seq) > total:
+            return -1                      # not enough worst-case room -> queue it
+        return orig_can_allocate(seq)
+
+    def allocate(seq, num_cached_blocks):
+        seq._wc = worst_case(seq)
+        bm._reserved += seq._wc
+        return orig_allocate(seq, num_cached_blocks)
+
+    def deallocate(seq):
+        bm._reserved -= getattr(seq, "_wc", 0)
+        seq._wc = 0
+        return orig_deallocate(seq)
+
+    bm.can_allocate = can_allocate
+    bm.allocate = allocate
+    bm.deallocate = deallocate
+    return mode
+
+
 def reset_prefix_cache(llm):
     """Clear cross-run prefix-cache state so each N is measured in isolation.
 
@@ -134,12 +200,16 @@ def reset_prefix_cache(llm):
         blk.token_ids = []
 
 
-def measure_n(llm, n, gpu_mem_util, prompt_tokens, max_tokens, verbose):
+def measure_n(llm, n, gpu_mem_util, prompt_tokens, max_tokens, verbose,
+              policy="lifo", admission="optimistic"):
     STATS.reset()
     STATS.verbose = verbose
     reset_prefix_cache(llm)
 
-    num_blocks = len(llm.scheduler.block_manager.blocks)
+    bm = llm.scheduler.block_manager
+    if hasattr(bm, "_reserved"):
+        bm._reserved = 0                   # clear conservative-admission accounting
+    num_blocks = len(bm.blocks)
 
     prompts = build_unique_prompts(llm, n, prompt_tokens)
     # nano-vllm forbids temperature <= 1e-10 (greedy sampling). The exact value is
@@ -157,6 +227,8 @@ def measure_n(llm, n, gpu_mem_util, prompt_tokens, max_tokens, verbose):
 
     row = {
         "N": n,
+        "policy": policy,
+        "admission": admission,
         "num_kvcache_blocks": num_blocks,
         "gpu_mem_util": gpu_mem_util,
         "prompt_tokens": prompt_tokens,
@@ -172,7 +244,7 @@ def measure_n(llm, n, gpu_mem_util, prompt_tokens, max_tokens, verbose):
         "peak_mem_mb": round(peak_mb, 1),
     }
 
-    print(f"N={n:4d} blocks={num_blocks:4d} "
+    print(f"[{policy}/{admission}] N={n:4d} blocks={num_blocks:4d} "
           f"preempt={row['num_preemptions']:4d} "
           f"(uniq={row['unique_seqs_preempted']:3d}) "
           f"reprefill_cached_blocks={row['cached_blocks_on_realloc']:4d} "
@@ -194,6 +266,14 @@ def main():
     p.add_argument("--max-tokens", type=int, default=600)
     p.add_argument("--max-num-seqs", type=int, default=256)
     p.add_argument("--max-model-len", type=int, default=2048)
+    p.add_argument("--policy", choices=["lifo", "cheapest"], default="lifo",
+                   help="eviction victim: lifo=newest (nano-vllm default), "
+                        "cheapest=fewest-token (cheapest to re-prefill)")
+    p.add_argument("--admission", choices=["optimistic", "conservative"],
+                   default="optimistic",
+                   help="optimistic=admit on current block need (default); "
+                        "conservative=reserve worst-case prompt+max_tokens blocks "
+                        "(provably zero preemption)")
     p.add_argument("--out", default="results.csv")
     p.add_argument("--verbose", action="store_true",
                    help="print every PREEMPT and CACHE-HIT event live")
@@ -205,6 +285,7 @@ def main():
     print(f"# model={model}")
     print(f"# gpu_mem_util={args.gpu_mem_util} prompt_tokens={args.prompt_tokens} "
           f"max_tokens={args.max_tokens}")
+    print(f"# policy={args.policy} admission={args.admission}")
     print(f"# sweeping N over {args.n}\n")
 
     # Build the engine ONCE (nano-vllm can't re-init its process group) and reuse
@@ -212,12 +293,14 @@ def main():
     # concurrently and can actually exhaust the cache.
     max_num_seqs = max(args.max_num_seqs, max(args.n))
     llm = build_llm(model, args.gpu_mem_util, max_num_seqs, args.max_model_len)
+    install_policy(llm, args.policy)
+    install_admission(llm, args.admission)
 
     rows = []
     for n in args.n:
         rows.append(measure_n(
             llm, n, args.gpu_mem_util, args.prompt_tokens, args.max_tokens,
-            args.verbose,
+            args.verbose, policy=args.policy, admission=args.admission,
         ))
 
     with open(args.out, "w", newline="") as f:

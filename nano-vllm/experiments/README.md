@@ -109,3 +109,59 @@ to allocate. Raise `--n` to add pressure.
 
 To plot without a display, write a CSV and plot locally, or add matplotlib with
 `plt.savefig("preempt.png")` and `scp` it back.
+
+---
+
+## Follow-up experiments
+
+All three reuse the monkeypatch approach (the nano-vllm repo is never edited).
+
+### A. Conservative admission (does reserving worst-case blocks beat preemption?)
+
+`exp_preempt.py --admission conservative` gates admission on a **global reserved-
+blocks counter** (worst-case `prompt + max_tokens` per live request), so the cache
+can never be oversubscribed → **provably zero preemption**. The trade: requests
+that don't fit wait in the queue instead of running and being evicted. Compare
+wall-clock vs the optimistic baseline across N to find the crossover — the N where
+"queue and never evict" beats "admit everyone and thrash".
+
+```bash
+python exp_preempt.py --model $MODEL --n 4 8 16 32 64 96 --gpu-mem-util 0.30 \
+    --admission optimistic  --out admit_optimistic.csv   # = your baseline
+python exp_preempt.py --model $MODEL --n 4 8 16 32 64 96 --gpu-mem-util 0.30 \
+    --admission conservative --out admit_conservative.csv
+```
+
+### B. Eviction policy: LIFO vs cheapest-to-redo
+
+`exp_preempt.py --policy cheapest` swaps the running queue for one whose `.pop()`
+evicts the **fewest-token** request (cheapest to re-prefill) instead of the newest.
+Three possible outcomes, all interesting: (i) similar to LIFO (newest ≈ cheapest in
+a uniform workload), (ii) better (truly minimal-cost victims), or (iii) worse
+(thrashing — repeatedly evicting the same cheap request, which LIFO avoids because
+a re-admitted request goes to the back of the queue). The `preempt` vs `uniq`
+columns reveal thrashing.
+
+```bash
+python exp_preempt.py --model $MODEL --n 4 8 16 32 64 96 --gpu-mem-util 0.30 \
+    --policy lifo     --out policy_lifo.csv
+python exp_preempt.py --model $MODEL --n 4 8 16 32 64 96 --gpu-mem-util 0.30 \
+    --policy cheapest --out policy_cheapest.csv
+```
+
+### C. Fairness under variable-length requests (`exp_varlen.py`)
+
+Sends a 50/50 mix of short (`max_tokens=100`) and long (`max_tokens=1000`)
+requests and reports, per group, how often each is evicted and its end-to-end
+latency. Tests whether LIFO disproportionately punishes long requests, and whether
+cheapest-to-redo changes the fairness picture.
+
+```bash
+python exp_varlen.py --model $MODEL --n 64 --gpu-mem-util 0.30 \
+    --policy lifo     --out varlen_lifo.csv
+python exp_varlen.py --model $MODEL --n 64 --gpu-mem-util 0.30 \
+    --policy cheapest --out varlen_cheapest.csv
+```
+
+Output columns: `group` (short/long), `requests_evicted`, `frac_evicted`,
+`mean_evictions`, `mean_latency_s`, `p50_latency_s`, `max_latency_s`.
