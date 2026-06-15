@@ -320,15 +320,27 @@ lesson: aggregate throughput is the wrong lens for preemption cost — it hides 
 waste. Per-request latency and total tokens-processed are the honest metrics.
 
 **Prediction 3 (prefix caching can't rescue) — strongly confirmed.** Recovery was
-~3% of lost blocks, and crucially **every cache hit recovered exactly one block**
-even though victims held 3–4. This is a clean confirmation of the Step 5 mechanism:
-when a victim re-prefills, `can_allocate` walks its blocks re-deriving the chained
-hash (`block_manager.py:62-68`); block 0's hash sometimes survives, but blocks 1+
-have already had their physical pages re-popped from the FIFO free list and their
-hashes deleted (`block_manager.py:44,47-48`). The chain breaks after the first
-block, so recovery is capped at one block regardless of how much the victim had
-generated. Prefix caching helps exactly when there is memory slack — and fails
-exactly under the pressure that causes preemption.
+~3% of lost blocks, and when a re-prefill recovered anything it recovered **exactly
+one block** even though victims held 3–4. There is a precise reason, and it comes
+from the interaction of two FIFO details:
+
+- The free list is FIFO: freed blocks go to the **back** (`block_manager.py:56`),
+  allocation takes from the **front** (`:44`).
+- `deallocate` frees a victim's blocks in **reverse** order
+  (`reversed(seq.block_table)`, `:95`). So the victim's *first* block `b0` lands at
+  the very back of the free queue (reused **last**), while its later blocks
+  `b1, b2, b3` sit nearer the front (reused **first**).
+
+When the victim re-prefills, `can_allocate` walks its blocks 0,1,2… re-deriving the
+*chained* hash and stops at the first miss (`:62-68`). Under load `b0` is usually
+still cached (reused last) so block 0 matches — but `b1` has already been grabbed
+by another request, which deleted its hash (`:47-48`), so block 1 misses and the
+chain breaks. **Hence recovery is capped at exactly one block, and specifically
+block 0**, no matter how much the victim had generated. It is even harsher in
+aggregate: `cache_hit_events` was 4 of 35 preemptions at N=96, so **~89% of evicted
+requests recovered nothing at all** — under heavy demand even `b0` is reused before
+the victim returns. Prefix caching helps exactly when there is memory slack — and
+fails exactly under the pressure that causes preemption.
 
 It's worth being fair to the feature: prefix caching was never *designed* to rescue
 preempted requests. Its job is to skip recomputation when two requests genuinely
