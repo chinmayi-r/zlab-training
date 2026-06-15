@@ -13,6 +13,12 @@ module load anaconda3/2024.2
 conda activate nanovllm
 cd "$SLURM_SUBMIT_DIR"
 
+# Log which GPU we landed on. flash-attn needs compute capability >= 8.0
+# (A100/Ampere or newer); older cards (V100=7.0, T4=7.5) fail with
+# "FlashAttention only supports Ampere GPUs or newer".
+nvidia-smi --query-gpu=name,compute_cap,memory.total --format=csv || true
+python -c "import torch; print('GPU:', torch.cuda.get_device_name(0), torch.cuda.get_device_capability(0))" || true
+
 # Compute nodes are offline; don't let HF phone home.
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 # nano-vllm source on path (the conda env was moved, so the editable install / pip
