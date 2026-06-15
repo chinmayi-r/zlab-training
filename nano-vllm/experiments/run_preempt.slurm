@@ -6,8 +6,14 @@
 #SBATCH --mem=32G
 #SBATCH --gres=gpu:1
 #SBATCH --time=01:00:00
-#SBATCH --partition=mig
+#SBATCH --partition=gpu
+#SBATCH --constraint=a100
 #SBATCH --output=preempt_%j.out
+# flash-attn needs an Ampere+ GPU (compute cap >= 8.0). On Adroit that's the A100
+# nodes: adroit-h11g1 (full A100, 40GB) or adroit-h11g2 (A100 MIG, 20GB slice).
+# The V100 node (adroit-h11g3) will fail with "FlashAttention only supports Ampere".
+# To force the small MIG slice (better for triggering preemption) add:
+#   #SBATCH --nodelist=adroit-h11g2
 
 module load anaconda3/2024.2
 conda activate nanovllm
