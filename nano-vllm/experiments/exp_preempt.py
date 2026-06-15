@@ -122,7 +122,10 @@ def run_one(model, n, gpu_mem_util, prompt_tokens, max_tokens,
     num_blocks = len(llm.scheduler.block_manager.blocks)
 
     prompts = build_unique_prompts(llm, n, prompt_tokens)
-    sp = SamplingParams(temperature=0.0, max_tokens=max_tokens, ignore_eos=True)
+    # nano-vllm forbids temperature <= 1e-10 (greedy sampling). The exact value is
+    # irrelevant to this stress test — ignore_eos=True forces every sequence to
+    # generate the full max_tokens regardless of which token is sampled.
+    sp = SamplingParams(temperature=0.6, max_tokens=max_tokens, ignore_eos=True)
 
     torch.cuda.reset_peak_memory_stats()
     t0 = time.perf_counter()
