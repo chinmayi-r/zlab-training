@@ -1,5 +1,19 @@
 # Adroit setup for nano-vllm
 
+## The golden rule: download on the login node, run on the compute node
+
+GPU compute nodes on Adroit (e.g. `adroit-h11g3`) have **no internet** — `pip`,
+`git`, and `huggingface_hub` all fail with `NameResolutionError: Failed to resolve
+'github.com'/'pypi.org'`. Only the login/visualization node (`adroit-vis`) has
+network. The home filesystem is **shared**, so:
+
+1. Do every install and download on `adroit-vis` (conda env + flash-attn wheel + model).
+2. Then `salloc` onto the GPU node and run **offline** (`export HF_HUB_OFFLINE=1
+   TRANSFORMERS_OFFLINE=1`).
+
+Installing a *prebuilt wheel* needs no GPU and no compiler, so flash-attn installs
+fine on the login node.
+
 ## The error you hit
 
 ```
@@ -20,10 +34,10 @@ Two things went wrong, both fixable:
 
 ## Recommended path: prebuilt wheel (fast, no compile)
 
-Get on a GPU node first:
+Do this on the **login node `adroit-vis`** (it has internet; a wheel install needs
+no GPU):
 
 ```bash
-salloc --nodes=1 --ntasks=1 --cpus-per-task=4 --mem=32G --gres=gpu:1 --time=01:00:00 --partition=mig
 module load anaconda3/2024.2
 conda activate nanovllm
 ```
@@ -67,21 +81,33 @@ the dependency as satisfied and will **not** try to rebuild it:
 ```bash
 python -c "import flash_attn; print('flash-attn OK', flash_attn.__version__)"
 cd ~/nano-vllm
-pip install -e . --no-build-isolation
+pip install -e . --no-build-isolation --no-deps
 ```
+
+`--no-build-isolation` makes pip use the env's already-installed setuptools instead
+of fetching `setuptools>=61` from pypi (which fails offline). `--no-deps` skips
+re-resolving flash-attn. If it still complains, skip the install and just run with
+`PYTHONPATH=~/nano-vllm` — nano-vllm is pure Python.
 
 ## Full clean recipe (copy-paste)
 
 ```bash
-# --- on a GPU compute node ---
+# --- ALL of this on the login node adroit-vis (has internet) ---
 module load anaconda3/2024.2
 conda create -n nanovllm python=3.11 -y && conda activate nanovllm
 pip install torch --index-url https://download.pytorch.org/whl/cu121
 pip install transformers triton xxhash safetensors numpy tqdm
-# flash-attn: prebuilt wheel matching your torch (see above)
+# flash-attn: prebuilt wheel matching your torch (no GPU/compiler needed for a wheel)
 pip install "https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.5cxx11abiFALSE-cp311-cp311-linux_x86_64.whl"
 git clone https://github.com/GeeeekExplorer/nano-vllm.git
-cd nano-vllm && pip install -e . --no-build-isolation
+cd nano-vllm && pip install -e . --no-build-isolation --no-deps
+# pre-fetch the model while you still have network
+python -c "from huggingface_hub import snapshot_download; snapshot_download('Qwen/Qwen3-0.6B', local_dir='$HOME/huggingface/Qwen3-0.6B')"
+
+# --- THEN move to the GPU node to actually run ---
+# salloc --gres=gpu:1 --time=01:00:00 --partition=mig --mem=32G --cpus-per-task=4
+# module load anaconda3/2024.2 && conda activate nanovllm
+# export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 ```
 
 ## Get the model
