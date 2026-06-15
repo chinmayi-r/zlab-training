@@ -373,6 +373,109 @@ total tokens-recomputed and wall-clock at N=64 and N=96.
 
 ---
 
+## Part 5 — Follow-ups: admission, eviction policy, and fairness
+
+Three extensions, all implemented by patching the live engine (the repo is still
+never edited): conservative admission, a cheapest-to-redo eviction policy, and a
+mixed short/long workload. Drivers and flags in
+[`experiments/`](experiments/README.md) (`--admission`, `--policy`, `exp_varlen.py`).
+
+> *Confound to keep in mind:* each configuration runs as a fresh process, and the
+> KV cache sized to 136 blocks for the baseline run and 143 for later ones (startup
+> free-memory variation). That's a ~5% shift in absolute block/preemption counts;
+> trends are unaffected.
+
+### 5A. Conservative admission — reserve worst-case blocks, never preempt
+
+Gate admission on a **global reserved-blocks counter** (worst-case
+`prompt + max_tokens` per live request) so the cache can't be oversubscribed.
+
+| N | optimistic wall / tok/s | conservative wall / tok/s | conservative preemptions |
+|---|--------------------------|----------------------------|--------------------------|
+| 4 | 17.52 / 137 | 15.25 / 157 | 0 |
+| 8 | 13.96 / 344 | 13.90 / 345 | 0 |
+| 16 | 13.93 / 689 | 13.84 / 694 | 0 |
+| 32 | 18.26 / 1052 | **29.82 / 644** | 0 |
+| 64 | 28.79 / 1334 | **41.86 / 917** | 0 |
+| 96 | 42.59 / 1353 | **55.77 / 1033** | 0 |
+
+**Result: it does exactly what it promises — zero preemptions at every N — and is
+strictly *slower* for it.** Below saturation (N≤16) the two are identical; once the
+cache saturates conservative is 1.6× slower at N=32, narrowing to 1.3× at N=96. The
+predicted crossover where conservative *beats* optimistic never occurs within
+N≤96. Why: conservative caps concurrency at ~28 sequences (143 blocks ÷ 5) and
+serializes the overflow, paying in idle parallelism and a low-batch tail;
+optimistic admits everyone and absorbs the overflow through *cheap, graceful*
+preemption (Part 4). **Because preemption is cheap, paying to avoid it costs more
+than it saves.** The gap shrinks with N (1.6×→1.3×), suggesting a crossover only at
+much heavier overload — a sweep to N=256+ would test that.
+
+### 5B. Eviction policy — LIFO vs cheapest-to-redo
+
+Swap `scheduler.running` for a deque whose `.pop()` evicts the fewest-token request
+(cheapest to re-prefill) instead of the newest.
+
+| N | LIFO preempt (uniq) | cheapest preempt (uniq) | LIFO wall / tok/s | cheapest wall / tok/s |
+|---|---------------------|--------------------------|-------------------|-----------------------|
+| 32 | 5 (5) | 4 (4) | 18.26 / 1052 | 18.20 / 1055 |
+| 64 | 26 (23) | 22 (21) | 28.79 / 1334 | 28.65 / 1340 |
+| 96 | 35 (32) | 38 (34) | 42.59 / 1353 | 42.43 / 1358 |
+
+**Result: outcome (i) — the policies are indistinguishable** in wall-clock and
+throughput. This confirms the prediction that for a *uniform* workload "newest" ≈
+"fewest tokens": the most-recently-admitted request has generated the least, so
+LIFO already approximates cheapest-to-redo. Neither thrashed (preempt-vs-uniq gaps
+are small for both). Cheapest recovered marginally more prefix blocks (3/6/9 vs
+1/3/4) but the magnitude is trivial. The takeaway: **LIFO is a reasonable default
+for uniform traffic — the policy only matters when newest ≠ cheapest**, i.e. under
+non-uniform workloads, which motivates 5C.
+
+### 5C. Fairness under mixed short/long requests (`exp_varlen.py`)
+
+64 requests, 50/50 split of `max_tokens=100` (short) and `max_tokens=1000` (long),
+200-token prompts, `gpu_memory_utilization=0.30`.
+
+| policy | group | frac evicted | mean latency (s) | max latency (s) |
+|--------|-------|--------------|------------------|-----------------|
+| LIFO | short | 0% | 3.64 | 3.64 |
+| LIFO | long | 12% | 25.36 | 29.02 |
+| cheapest | short | 0% | 3.58 | 3.58 |
+| cheapest | long | 12% | 25.04 | 28.68 |
+
+**Results:**
+1. **The eviction burden falls entirely on long requests** — 0% of short requests
+   were ever evicted, 12% of long were. Short requests finish in ~3.6 s and leave
+   the running set before the cache fills, so they're never eviction candidates;
+   long requests are resident during the squeeze and hold the most blocks, so they
+   are both the trigger and the victim. The policy is **structurally unfair to long
+   requests** — confirmed.
+2. **But most of the latency gap is inherent, not eviction-induced.** Long requests
+   take ~25 s vs ~3.6 s mostly because they generate 10× more tokens. Eviction adds
+   only a modest tail: evicted long requests reach ~29 s vs a ~24.8 s median — a
+   ~4–5 s penalty on the unlucky 12%. Eviction worsens long-request tail latency
+   but is not the main driver of the short/long gap.
+3. **Changing the policy doesn't fix fairness.** LIFO and cheapest give
+   near-identical eviction rates and latencies, because in this mix the long
+   requests are the only viable eviction targets regardless of victim heuristic.
+   Fairness needs a fairness-aware mechanism (priority/aging, or CPU swap so long
+   requests *pause* instead of restart), not a smarter victim choice.
+
+This config produced only mild pressure (4 evictions); a harsher setting (lower
+util or a higher long-request fraction) would amplify the eviction tail and is the
+natural next step.
+
+### What the follow-ups add up to
+
+- **Avoiding preemption is not worth it here:** conservative reservation eliminates
+  preemption but is strictly slower up to N=96, because preemption is cheap.
+- **The eviction policy barely matters** for uniform or mildly-mixed workloads;
+  LIFO is a fine default.
+- **The real lever is fairness:** long requests bear all the eviction cost — a
+  structural property of length-mixed traffic, fixable only by fairness-aware
+  scheduling or true swap, not by tweaking which victim you pick.
+
+---
+
 ## Connection to research
 
 KV-cache layout matters for interpretability probes on intermediate activations.
