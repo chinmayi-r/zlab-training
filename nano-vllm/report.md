@@ -16,6 +16,21 @@ legible. The gap it fills is pedagogical — it is vLLM's ideas made readable.
 
 All line numbers below refer to the `main` branch as of this report.
 
+**TL;DR in plain terms.** To generate text, the model keeps "notes" (the KV cache)
+about everything read and written so far, so it never re-reads from the start.
+Those notes live in limited GPU memory. When too many requests run at once, the
+notes don't fit, and nano-vllm *preempts*: it picks one request, **deletes all its
+notes, and sends it back to the start of the line to redo everything**. This report
+asks how much that costs. Findings: (1) it kicks in sharply once the cache
+saturates (here ~27 concurrent requests); (2) each eviction forces exactly one full
+re-do of that request's work — ~36% more prefill passes and roughly half-again the
+useful token-work at heavy load; (3) the "reuse old notes" feature (prefix caching)
+recovers almost nothing (~3%, one block per victim), because the freed memory is
+reused immediately under the very pressure that caused the eviction; and (4) the
+surprise — overall tokens/sec does **not** crash, it just stops improving. The cost
+hides in *latency*, not throughput. So watching throughput alone makes preemption
+look free when it isn't.
+
 ---
 
 ## Part 1 — Background: the three ideas (so the question makes sense)
@@ -245,14 +260,23 @@ Qwen3-0.6B on an A100 MIG `3g.20gb` slice, `gpu_memory_utilization=0.30`
 `ignore_eos=True`. One engine reused across all N; prefix cache cleared between
 sweep points so every recovery is genuine within-run preemption recovery.
 
-| N | blocks | preemptions | uniq preempted | reprefill cached blocks | wall (s) | tok/s |
-|---|--------|-------------|----------------|-------------------------|----------|-------|
-| 4 | 136 | 0 | 0 | 0 | 17.48 | 137 |
-| 8 | 136 | 0 | 0 | 0 | 14.03 | 342 |
-| 16 | 136 | 0 | 0 | 0 | 13.98 | 687 |
-| 32 | 136 | 5 | 5 | 1 | 18.28 | 1050 |
-| 64 | 136 | 26 | 23 | 3 | 28.84 | 1332 |
-| 96 | 136 | 35 | 32 | 4 | 42.71 | 1349 |
+| N | blocks | preemptions | uniq preempted | reprefill cached blocks | allocate_calls | wall (s) | tok/s |
+|---|--------|-------------|----------------|-------------------------|----------------|----------|-------|
+| 4 | 136 | 0 | 0 | 0 | 4 | 17.48 | 137 |
+| 8 | 136 | 0 | 0 | 0 | 8 | 14.03 | 342 |
+| 16 | 136 | 0 | 0 | 0 | 16 | 13.98 | 687 |
+| 32 | 136 | 5 | 5 | 1 | 37 | 18.28 | 1050 |
+| 64 | 136 | 26 | 23 | 3 | 90 | 28.84 | 1332 |
+| 96 | 136 | 35 | 32 | 4 | 131 | 42.71 | 1349 |
+
+**Each preemption = exactly one extra full re-prefill.** The data shows the clean
+identity `allocate_calls = N + num_preemptions` at every point (32+5=37, 64+26=90,
+96+35=131). So preemption's cost is precisely "redo the prefill," with no hidden
+multiplier. `total_out_tokens` is also exactly N×600 throughout, meaning every
+request still finished its full output — preemption *delayed* work, it never
+*dropped* any. Peak GPU memory is flat at ~5.68 GB from N=32 on, confirming the KV
+cache is a fixed pre-allocated slab (`model_runner.py:115`): memory doesn't grow
+with load, the cache just runs out of free blocks to hand out.
 
 **Knee (onset of preemption):** N = 32. The cache holds ~27 concurrent 1200-token
 sequences (136 blocks ÷ 5 blocks/seq); preemption begins as soon as N exceeds that.
@@ -262,12 +286,15 @@ then **plateaus** at ~1330–1350 tok/s for N=64 and N=96. There is **no cliff**
 see analysis below.
 
 **Recovery:** total blocks recovered on re-prefill = 4 (at N=96), against ~120
-blocks lost to eviction — about **3%**. Every single cache hit recovered **exactly
-1 block**, never more.
+blocks lost to eviction — about **3%**. `cache_hit_events` equals
+`cached_blocks_on_realloc` at every N (1, 3, 4), which means each recovering
+re-prefill got back **exactly one block**, never more — the chained hash breaks
+after block 0 (see Part 4).
 
-**Wasted compute (N=96):** 35 preemptions, each victim holding ~770–1025 tokens
-(3–4 blocks) → roughly 35 × ~900 ≈ **31,500 tokens re-prefilled from scratch**,
-about **55% of the 57,600 output tokens** generated. Substantial waste that the
+**Wasted compute (N=96):** 35 extra full re-prefills (`allocate_calls` 131 vs N=96,
+i.e. **36% more prefill passes than the no-preemption baseline**). Each victim held
+~770–1025 tokens (3–4 blocks), so ≈ 35 × ~900 ≈ **31,500 tokens re-prefilled from
+scratch**, about **~55% of the 57,600 output tokens** generated. Substantial waste that the
 throughput number does not reveal.
 
 See `experiments/exp_plot.py` for the two plots (preemptions-vs-N, throughput-vs-N).
@@ -302,6 +329,16 @@ hashes deleted (`block_manager.py:44,47-48`). The chain breaks after the first
 block, so recovery is capped at one block regardless of how much the victim had
 generated. Prefix caching helps exactly when there is memory slack — and fails
 exactly under the pressure that causes preemption.
+
+It's worth being fair to the feature: prefix caching was never *designed* to rescue
+preempted requests. Its job is to skip recomputation when two requests genuinely
+share a prefix (a shared system prompt, or the same prompt re-asked) — and at that
+job it works well. The fact that `deallocate` leaves hashes intact
+(`block_manager.py:53-56`) makes *some* preemption recovery possible as a side
+effect, which is why a naive reading of the code ("the hashes are kept, so a victim
+should get everything back!") predicts much higher recovery than the ~1 block we
+measured. The experiment's value is showing precisely why that naive expectation is
+wrong under load.
 
 **On the LIFO policy.** It is *defensible* but not *optimal*. Defensible: evicting
 the newest sequence protects the older sequences that have generated the most
