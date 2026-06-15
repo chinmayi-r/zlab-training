@@ -240,43 +240,87 @@ Full driver, instrumentation, and run instructions in
 
 ### Results
 
-_Fill in after running on Adroit:_
+Qwen3-0.6B on an A100 MIG `3g.20gb` slice, `gpu_memory_utilization=0.30`
+(→ 136 KV-cache blocks), 600-token unique prompts, 600 generated tokens,
+`ignore_eos=True`. One engine reused across all N; prefix cache cleared between
+sweep points so every recovery is genuine within-run preemption recovery.
 
 | N | blocks | preemptions | uniq preempted | reprefill cached blocks | wall (s) | tok/s |
 |---|--------|-------------|----------------|-------------------------|----------|-------|
-| 4 | | | | | | |
-| 8 | | | | | | |
-| 16 | | | | | | |
-| 32 | | | | | | |
-| 64 | | | | | | |
-| 96 | | | | | | |
+| 4 | 136 | 0 | 0 | 0 | 17.48 | 137 |
+| 8 | 136 | 0 | 0 | 0 | 14.03 | 342 |
+| 16 | 136 | 0 | 0 | 0 | 13.98 | 687 |
+| 32 | 136 | 5 | 5 | 1 | 18.28 | 1050 |
+| 64 | 136 | 26 | 23 | 3 | 28.84 | 1332 |
+| 96 | 136 | 35 | 32 | 4 | 42.71 | 1349 |
 
-**Knee (onset of preemption):** N = ___
-**Throughput peak / cliff:** ___ tok/s at N=___, falling to ___ tok/s at N=___
-**Recovery:** total blocks recovered on re-prefill = ___ (≈0 supports hypothesis (b))
-**Wasted compute estimate:** ~`num_preemptions × (prompt + avg generated)` tokens
-recomputed = ___ , i.e. ___% of `total_out_tokens`.
+**Knee (onset of preemption):** N = 32. The cache holds ~27 concurrent 1200-token
+sequences (136 blocks ÷ 5 blocks/seq); preemption begins as soon as N exceeds that.
+
+**Throughput:** rises steeply while the cache has room (137 → 342 → 687 → 1050)
+then **plateaus** at ~1330–1350 tok/s for N=64 and N=96. There is **no cliff** —
+see analysis below.
+
+**Recovery:** total blocks recovered on re-prefill = 4 (at N=96), against ~120
+blocks lost to eviction — about **3%**. Every single cache hit recovered **exactly
+1 block**, never more.
+
+**Wasted compute (N=96):** 35 preemptions, each victim holding ~770–1025 tokens
+(3–4 blocks) → roughly 35 × ~900 ≈ **31,500 tokens re-prefilled from scratch**,
+about **55% of the 57,600 output tokens** generated. Substantial waste that the
+throughput number does not reveal.
+
+See `experiments/exp_plot.py` for the two plots (preemptions-vs-N, throughput-vs-N).
 
 ---
 
 ## Part 4 — What I learned & the policy I'd try next
 
-_(Write after results. Skeleton:)_
+**Prediction 1 (preemption onset) — confirmed.** Evictions are zero until the cache
+saturates at N≈27, then climb monotonically (5 → 26 → 35). The LIFO policy is
+directly visible in the logs: victims are evicted in descending seq_id order
+(`seq 67, 66, 65, 64, 63…`), i.e. newest-first, exactly `self.running.pop()`
+(`scheduler.py:62`).
 
-- Did the throughput cliff line up with the preemption knee? (Tests prediction 2.)
-- Was `cached_blocks_on_realloc` near zero? If yes, prefix caching does not help
-  under the pressure that causes preemption — the recovery path of Step 4 is
-  defeated by Step 5 exactly when you need it. If no, explain: free-list slack let
-  victims' blocks survive (`block_manager.py:44`).
-- **Concrete alternative to LIFO:** evict by *least invested compute* — pick the
-  running sequence with the fewest generated tokens (cheapest to recompute)
-  instead of the newest. That bounds wasted re-prefill per eviction. A
-  production-grade option is a true CPU **swap** (vLLM's `swap_out`/`swap_in`):
-  copy the victim's blocks to host memory instead of dropping them, so it resumes
-  decode instead of re-prefilling — trading PCIe bandwidth for zero recompute.
-  With more time I'd implement the least-invested-compute policy (a one-line change
-  to the victim selection at `scheduler.py:62`, plus a priority structure over
-  `running`) and re-run this same sweep to compare wasted-token counts.
+**Prediction 2 (throughput cliff) — falsified, and this is the headline.**
+Throughput does not collapse when preemption begins; it *plateaus*. The system
+degrades **gracefully**, not off a cliff. The reason: throughput is measured in
+*output* tokens/sec, and re-prefill is a single highly-parallel forward pass —
+cheap per token compared to the memory-bound decode loop. So the recomputed work
+(≈55% extra tokens at N=96) barely moves tok/s; it surfaces as **wall-clock /
+latency** instead (wall triples from N=16 to N=96 while throughput is flat). The
+lesson: aggregate throughput is the wrong lens for preemption cost — it hides the
+waste. Per-request latency and total tokens-processed are the honest metrics.
+
+**Prediction 3 (prefix caching can't rescue) — strongly confirmed.** Recovery was
+~3% of lost blocks, and crucially **every cache hit recovered exactly one block**
+even though victims held 3–4. This is a clean confirmation of the Step 5 mechanism:
+when a victim re-prefills, `can_allocate` walks its blocks re-deriving the chained
+hash (`block_manager.py:62-68`); block 0's hash sometimes survives, but blocks 1+
+have already had their physical pages re-popped from the FIFO free list and their
+hashes deleted (`block_manager.py:44,47-48`). The chain breaks after the first
+block, so recovery is capped at one block regardless of how much the victim had
+generated. Prefix caching helps exactly when there is memory slack — and fails
+exactly under the pressure that causes preemption.
+
+**On the LIFO policy.** It is *defensible* but not *optimal*. Defensible: evicting
+the newest sequence protects the older sequences that have generated the most
+tokens, so it tends to preempt victims that have less invested (the logs show
+victims with 769–1025 tokens, often the shorter ones). Not optimal: it is blind to
+invested compute and re-evicts recently re-admitted sequences (N=96: 35 evictions,
+32 unique → 3 sequences thrashed twice), wasting their re-prefill repeatedly.
+
+**The policy I'd try next.** Evict by *least invested compute* — choose the running
+sequence with the fewest tokens generated so far (cheapest to recompute) rather
+than the newest. That directly minimizes wasted re-prefill per eviction and avoids
+thrashing a sequence that just paid to come back. It's a small change: replace
+`self.running.pop()` (`scheduler.py:62`) with an `argmin` over `running` by
+`seq.num_completion_tokens`, backed by a heap if the linear scan matters. The
+production-grade answer is a true CPU **swap** (vLLM's `swap_out`/`swap_in`): copy
+the victim's blocks to host memory instead of dropping them, so it *resumes* decode
+instead of re-prefilling — trading PCIe bandwidth for zero recompute. With more
+time I'd implement least-invested-compute, re-run this exact sweep, and compare
+total tokens-recomputed and wall-clock at N=64 and N=96.
 
 ---
 
