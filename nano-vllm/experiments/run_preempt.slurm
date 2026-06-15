@@ -13,7 +13,13 @@ module load anaconda3/2024.2
 conda activate nanovllm
 cd "$SLURM_SUBMIT_DIR"
 
-MODEL=~/huggingface/Qwen3-0.6B
+# Compute nodes are offline; don't let HF phone home.
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+# nano-vllm source on path (the conda env was moved, so the editable install / pip
+# console scripts are unreliable — PYTHONPATH avoids needing the install at all).
+export PYTHONPATH=${NANOVLLM_SRC:-/scratch/network/cr7998/nano-vllm}
+
+MODEL=${MODEL:-/scratch/network/cr7998/hf/Qwen3-0.6B}
 
 # Sweep N under tight memory so preemption is forced. If preempt=0 everywhere,
 # lower --gpu-mem-util (e.g. 0.20) and resubmit.

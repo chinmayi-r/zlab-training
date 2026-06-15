@@ -87,7 +87,26 @@ pip install -e . --no-build-isolation --no-deps
 `--no-build-isolation` makes pip use the env's already-installed setuptools instead
 of fetching `setuptools>=61` from pypi (which fails offline). `--no-deps` skips
 re-resolving flash-attn. If it still complains, skip the install and just run with
-`PYTHONPATH=~/nano-vllm` — nano-vllm is pure Python.
+`PYTHONPATH=<path-to-nano-vllm>` — nano-vllm is pure Python.
+
+### If you moved the conda env (e.g. to /scratch) and `pip` is broken
+
+Relocating a conda env breaks the shebangs of its `bin/` console scripts — they
+still point at the old absolute python path, so you'll see:
+
+```
+bad interpreter: /home/<user>/.conda/envs/nanovllm/bin/python3.11: No such file or directory
+```
+
+`python` itself still works. Two fixes:
+- Use `python -m pip ...` instead of `pip ...` (bypasses the broken shebang).
+- Better, skip installing nano-vllm entirely and just put the source on the path:
+  ```bash
+  export PYTHONPATH=/scratch/network/<user>/nano-vllm   # add to ~/.bashrc + slurm script
+  python -c "import nanovllm; print(nanovllm.__file__)"  # should work from any dir
+  ```
+The provided `experiments/run_preempt.slurm` already exports `PYTHONPATH` (override
+with `NANOVLLM_SRC=...`) and `MODEL` (override with `MODEL=...`).
 
 ## Full clean recipe (copy-paste)
 
