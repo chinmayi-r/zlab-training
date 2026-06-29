@@ -209,6 +209,8 @@ Put two filled failure-node rows + the A/B result into the Part F tables in
 |---|---|
 | `module load anaconda3` → "No default version" | pin a version: `module load anaconda3/2024.6` (`module avail anaconda3` to list) |
 | `PS1: unbound variable` during conda activate | `set +u` before `conda activate`, `set -u` after — the kit scripts already do this |
+| `import torch` → `undefined symbol: iJIT_NotifyEvent` | conda pulled MKL 2025; pin it back: `conda install "mkl=2024.0" -y` (kit script now does this) |
+| pip warns `torch requires sympy==1.13.1` | `pip install "sympy==1.13.1"` (kit script now does this) |
 | github clone `403` on a compute node | expected — clone on the **login node** (general internet); compute nodes are allowlist-only |
 | `curl https://api-ai-sandbox.princeton.edu/` → 502 | not a failure — a bare `/` isn't a valid path. Test with the AzureOpenAI smoke call instead |
 | `salloc` fails with `--partition=mig` | there is no `mig` partition; use `--partition=gpu --gres=gpu:3g.20gb:1` (MIG slice) |

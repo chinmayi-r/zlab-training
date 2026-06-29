@@ -48,12 +48,16 @@ conda create -n "$ENV_NAME" python=3.11 -y
 conda activate "$ENV_NAME"   # top of script omits `set -u`, so conda's $PS1 ref is safe
 
 conda install pytorch torchvision torchaudio pytorch-cuda=12.4 -c pytorch -c nvidia -y
+# The conda solver pulls MKL 2025, which dropped the `iJIT_NotifyEvent` symbol that
+# torch 2.5.1 links against -> `import torch` fails. Pin MKL back to 2024.
+conda install -n "$ENV_NAME" "mkl=2024.0" -y
 conda install anaconda::poppler -y          # PDF tools
 conda install conda-forge::chktex -y        # LaTeX lint
 
 echo "==> 5. Python requirements"
 cd "$REPO_DIR"
 pip install -r requirements.txt
+pip install "sympy==1.13.1"                  # torch 2.5.1 pins this; requirements pulls 1.14
 pip install "ruamel.yaml" || true           # keeps comments when generating config variants
 # Only if you keep the DEFAULT Bedrock-Claude experiment model (NOT the $0 Sandbox route):
 # pip install "anthropic[bedrock]"
