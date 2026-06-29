@@ -47,10 +47,12 @@ echo "==> 4. Create + activate env '$ENV_NAME' (per README)"
 conda create -n "$ENV_NAME" python=3.11 -y
 conda activate "$ENV_NAME"   # top of script omits `set -u`, so conda's $PS1 ref is safe
 
-conda install pytorch torchvision torchaudio pytorch-cuda=12.4 -c pytorch -c nvidia -y
-# The conda solver pulls MKL 2025, which dropped the `iJIT_NotifyEvent` symbol that
-# torch 2.5.1 links against -> `import torch` fails. Pin MKL back to 2024.
-conda install -n "$ENV_NAME" "mkl=2024.0" -y
+# PyTorch via the self-contained pip cu124 wheels, NOT conda. The conda pytorch build
+# pulls MKL 2025 (breaks `import torch`: undefined symbol iJIT_NotifyEvent), and even
+# pinning mkl=2024 leaves torchvision ABI-broken (torchvision::nms does not exist). The
+# pip wheels bundle their own CUDA/MKL libs and are mutually ABI-matched -> both fixed.
+pip install --no-cache-dir torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 \
+    --index-url https://download.pytorch.org/whl/cu124
 conda install anaconda::poppler -y          # PDF tools
 conda install conda-forge::chktex -y        # LaTeX lint
 
