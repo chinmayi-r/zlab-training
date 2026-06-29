@@ -62,9 +62,18 @@ python scripts/wire_sandbox.py --repo $REPO_DIR
 # If an anchor isn't found, it tells you to patch by hand (see report.md Part D).
 ```
 
-Quick smoke test that calls actually route to the Sandbox:
+Smoke test that calls actually route to the Sandbox. **The Sandbox is reachable ONLY
+from a compute node with `module load proxy/default`** — the login node cannot resolve
+`api-ai-sandbox.princeton.edu` (per Princeton RC docs). So grab a quick session:
 
 ```bash
+salloc --nodes=1 --ntasks=1 --cpus-per-task=2 --mem=8G --time=00:20:00   # CPU node is fine
+module load proxy/default                  # compute-node only -- this is what reaches the Sandbox
+module load anaconda3/2024.6
+source "$(conda info --base)/etc/profile.d/conda.sh"
+conda activate ai_scientist
+source ~/.ai_scientist_secrets
+
 python - <<'PY'
 import os
 from openai import AzureOpenAI
@@ -77,15 +86,15 @@ print("sandbox says:", r.choices[0].message.content)
 PY
 ```
 
-> Run this smoke test **on the login node** (it reaches the Sandbox over general
-> internet — no proxy module needed there). The definitive *compute-node* check is built
-> into the SLURM scripts, since that's where the GPU job actually makes its calls.
+> `Name or service not known` / `ConnectError` = you're on the login node, or forgot
+> `module load proxy/default`. A model-not-found (404) is *fine* — it proves the route
+> works; just use a current model name (`gpt-4o`).
 
-## 4. Copy the two idea topics into the repo and generate idea JSONs
+## 4. Generate idea JSONs — ALSO on a compute node (ideation calls the Sandbox)
 
-The launcher consumes a `*.json` idea file (and, with `--load_code`, a same-named
-`*.py`). Generate the JSON once per topic with the ideation script (cheap, paid once —
-or free via the Sandbox since ideation also goes through the patched OpenAI path):
+Ideation makes Sandbox calls, so it must run on a compute node with `proxy/default`
+loaded (no GPU needed — a CPU session is fine). Do this in the *same* `salloc` session
+as the smoke test above:
 
 ```bash
 cd $REPO_DIR

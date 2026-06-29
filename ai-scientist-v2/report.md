@@ -301,20 +301,24 @@ by hand as shown above.
 
 ## Part E — Adroit / SLURM gotchas (the ones that actually bite)
 
-- **Network topology is the opposite of the naive assumption (verified June 2026).**
-  The **login node** (`adroit-vis`) has general outbound internet — `git clone`, `pip`,
-  `conda`, and dataset downloads work there. **Compute nodes do not**: `module load
-  proxy/default` opens only a small **pre-approved API allowlist**. Evidence: a github
-  clone on a compute node returns **403** (blocked), while the Sandbox host returns
-  **502** to a bare `curl /` (reached, but `/` isn't a valid endpoint — *not* blocked;
-  blocked would be 403). Consequences baked into the kit:
-  - Do **all setup + dataset pre-fetch on the login node** (`setup_adroit.sh` refuses to
-    run if github is unreachable, i.e. if you're on a compute node).
-  - The GPU **job** runs on a compute node and makes its LLM calls there, so the Sandbox
-    must be allow-listed for compute nodes. A bare curl can't prove that; the SLURM
-    scripts run a real `AzureOpenAI.chat.completions.create` smoke test and abort early
-    if it fails (so you don't burn a job slot). If it *does* fail, that's a finding to
-    raise with RC — ask them to allowlist `api-ai-sandbox.princeton.edu` for compute nodes.
+- **Two disjoint networks — and the Sandbox lives on the compute side (verified June
+  2026, confirmed against Princeton RC docs).** This is the single most important
+  operational fact, and it is *split*:
+  - The **login node** (`adroit-vis`) has general outbound internet — `git clone`, `pip`,
+    `conda`, public dataset downloads work. But it **cannot reach the Sandbox at all**:
+    `api-ai-sandbox.princeton.edu` does not even resolve there (`Name or service not
+    known`). So setup/env/dataset-prefetch go on the login node; Sandbox calls cannot.
+  - **Compute nodes** have *no* general internet (a github clone returns **403**), but
+    they reach the Sandbox via `module load proxy/default` (RC's documented mechanism;
+    the module sets `HTTP(S)_PROXY` which `httpx`/`openai` honor automatically — no code
+    change). A bare `curl /` to the Sandbox returns **502** (reached, wrong path — *not*
+    403/blocked), so only a real `chat.completions.create` proves it; the SLURM scripts
+    run exactly that as a pre-flight and abort early if it fails.
+  - **Net consequence:** every step that calls the Sandbox — **ideation *and* the runs** —
+    must execute on a **compute node with `proxy/default`** (ideation needs no GPU, so a
+    CPU session from the `all` partition suffices). Only clone/conda/dataset-prefetch
+    belong on the login node. `setup_adroit.sh` refuses to run where github is
+    unreachable; the SLURM scripts load `proxy/default` before any Sandbox call.
   - LLM-*written* code that tries to download data at runtime will fail on the compute
     node; pre-fetch datasets on the login node (`CIFAR_DIR`, `HF_HOME` on scratch).
 - **Two conda gotchas.** `module load anaconda3` errors with "No default version" — pin
