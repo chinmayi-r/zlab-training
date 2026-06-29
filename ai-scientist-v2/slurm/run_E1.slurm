@@ -47,7 +47,6 @@ cp "$CFG" bfts_config.yaml
 # Semantic Scholar (citations) is proxy-blocked, and we only need the experiment tree.
 python launch_scientist_bfts.py \
   --load_ideas "ai_scientist/ideas/topic_baseline.json" \
-  --load_code \
   --skip_writeup --skip_review
 
 echo "DONE. Mine the tree:"

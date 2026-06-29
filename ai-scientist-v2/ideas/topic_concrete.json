@@ -1,0 +1,24 @@
+[
+    {
+        "Name": "regularization_backfire_cifar",
+        "Title": "When Regularization Backfires: A Controlled Study on CIFAR-10 with a Small CNN",
+        "Short Hypothesis": "On a fixed small CIFAR-10 subset trained with a fixed ResNet-18 from scratch under an identical modest budget, some standard regularizers (dropout, weight decay, label smoothing, RandAugment) reduce top-1 test accuracy below an unregularized baseline. Pinning the setup reveals exactly which regularizers backfire and by how much.",
+        "Related Work": "Regularization is applied almost reflexively in low-data deep learning to curb overfitting, but practitioners frequently observe that individual regularizers interact badly with small-sample regimes or specific architectures and can underperform a plain baseline. Prior work studies regularizers largely in isolation and in the large-data regime; comparatively little is reported on clean, fully specified negative results in a fixed small-data setting. This study isolates that question with a deliberately pinned-down, reproducible protocol on a single small GPU.",
+        "Abstract": "Practitioners reach for dropout, weight decay, data augmentation, and label smoothing whenever data is scarce, assuming these techniques improve generalization. In practice the picture is murkier: some regularizers leave a model worse off than a plain baseline. We isolate when this happens under a fully specified, reproducible protocol designed to run on a single ~10GB GPU. We use CIFAR-10 with a FIXED 5,000-image training subset (500 per class, seed 0) and the full 10,000-image test set, and a ResNet-18 trained from scratch (no pretrained weights). We compare a no-regularization baseline against four one-variable-at-a-time conditions: dropout p=0.3, weight decay 5e-4, label smoothing 0.1, and RandAugment. The metric is top-1 test accuracy, reported as mean +/- std over 3 seeds (0,1,2). Training is fixed: SGD, lr=0.1 cosine-decayed, batch size 128, 30 epochs, no early stopping, no hyperparameter search. The deliverable is a table of test accuracy per arm and seed plus a bar chart with error bars, identifying which arms fall below baseline and by how much.",
+        "Experiments": [
+            "Dataset: CIFAR-10 via torchvision (already cached locally; set download=False and root to the CIFAR_DIR environment variable, falling back to ./data). Build a FIXED training subset of 5,000 images (500 per class) using seed 0; evaluate on the full 10,000-image test set.",
+            "Model: torchvision ResNet-18 with num_classes=10, trained from scratch (pretrained=False). This is the ONLY architecture; do not substitute or scale it.",
+            "Training budget (identical for every arm): SGD, lr=0.1 with cosine decay, momentum 0.9, batch size 128, 30 epochs, no early stopping, no hyperparameter search.",
+            "Arms (one variable at a time vs. the baseline): (1) baseline no regularization, (2) dropout p=0.3, (3) weight decay 5e-4, (4) label smoothing 0.1, (5) RandAugment. Exactly these five.",
+            "Metric: top-1 test accuracy, reported as mean +/- std over 3 seeds (0,1,2) for every arm.",
+            "Compute constraint: must fit and finish on a single ~10GB GPU (MIG A100 slice). Keep batch size <= 128; if memory is tight reduce batch size to 64 rather than changing the model or dataset.",
+            "Deliverable: a table of test accuracy per arm and per seed, and a bar chart with error bars; explicitly identify which arms fall below the baseline and by how much."
+        ],
+        "Risk Factors and Limitations": [
+            "Results may be specific to ResNet-18 and the chosen 5k CIFAR-10 subset and may not generalize to other architectures or datasets.",
+            "With only 3 seeds, small accuracy differences between arms may not be statistically distinguishable.",
+            "A fixed budget (30 epochs, no tuning) may not let every regularizer reach its best achievable accuracy, which is intentional but limits strong claims about any single regularizer.",
+            "RandAugment adds per-batch augmentation overhead that may slow training within the compute budget."
+        ]
+    }
+]

@@ -1,4 +1,7 @@
 #!/bin/bash
+# NOTE: Semantic Scholar (api.semanticscholar.org) is BLOCKED by Adroit's proxy,
+# and perform_ideation has no flag to skip its literature search, so this HANGS on
+# backoff retries. Use the pre-written ideas/topic_*.json instead (bypasses ideation).
 # run_ideation.slurm - generate idea JSONs from the topic .md files. Ideation calls
 # the LLM API, so it must run on a compute node with proxy/default (no GPU needed).
 # Prereq (do once on the LOGIN node): copy the topic files into the repo:

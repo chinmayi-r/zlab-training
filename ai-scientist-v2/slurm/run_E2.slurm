@@ -44,7 +44,6 @@ echo "using idea: $IDEA"
 
 python launch_scientist_bfts.py \
   --load_ideas "$IDEA" \
-  --load_code \
   --skip_writeup --skip_review
 
 echo "DONE. Compare nodes-to-first-working-node + #OOM/setup errors across the two arms."
