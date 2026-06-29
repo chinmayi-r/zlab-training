@@ -5,35 +5,45 @@ V100)** on Adroit with the **Princeton AI Sandbox** as the $0 model backend. Eve
 flag/config key here was verified against the real repo — if the repo's README ever
 disagrees, **the repo wins**.
 
-> Adroit specifics (`--partition`, `--gres`, `module load` names, undergrad time
-> limits) vary; the placeholders below mirror the lab's nano-vllm setup. **Verify them
-> against the current Princeton RC / Adroit docs.**
+> **Adroit network topology (verified June 2026 — important, and the opposite of what
+> you might assume):**
+> - **LOGIN node (`adroit-vis`)** has general outbound internet → `git clone`, `pip`,
+>   `conda` all work here. **Do all setup + dataset downloads on the login node.**
+> - **COMPUTE nodes** have *no* general internet; `module load proxy/default` opens only
+>   a small **pre-approved API allowlist**. A github clone there returns **403**. The
+>   Sandbox host returns **502** to a bare `curl /` — that means "reached but wrong
+>   path", not "blocked" (blocked = 403), so it is *probably* allow-listed; prove it
+>   with a real `chat.completions.create`, not curl.
+> - GPUs are in the **`gpu`** partition (there is no `mig` partition). MIG A100 slices
+>   are gres `3g.20gb` (~20GB) on `adroit-h11g2`; full A100s are `--gres=gpu:1
+>   --constraint=a100`.
 
 ---
 
-## 0. Get the kit onto Adroit
+## 0. Get the kit onto Adroit (login node)
 
 ```bash
-# on Adroit
 git clone https://github.com/chinmayi-r/zlab-training.git    # or pull if you have it
 cd zlab-training/ai-scientist-v2
+git checkout claude/ai-scientist-v2-failures-l9vej5
 chmod +x scripts/*.sh scripts/*.py slurm/*.slurm
 ```
 
-## 1. One-time setup (on a COMPUTE node)
+## 1. One-time setup — ON THE LOGIN NODE (general internet lives here)
 
-Outbound internet and the Sandbox only work after `module load proxy/default`, which
-only works on a compute node — so grab an interactive session first:
+Do NOT salloc for setup. Clone + env build need general internet, which compute nodes
+lack. Put the repo and conda env on **scratch** (small /home quota):
 
 ```bash
-salloc --nodes=1 --ntasks=1 --cpus-per-task=8 --mem=32G \
-       --gres=gpu:1 --time=01:00:00 --partition=mig      # verify syntax for Adroit
-module load proxy/default
-curl -sSf https://api.openai.com/v1/models >/dev/null && echo "internet OK" || echo "NO INTERNET"
+export REPO_DIR=/scratch/network/$USER/AI-Scientist-v2
+export CONDA_ENVS_DIR=/scratch/network/$USER/conda-envs
+export ANACONDA_MODULE=anaconda3/2024.6        # `module avail anaconda3` for the exact name
 
-# clone + conda env + requirements + GPU check (mirrors the repo README verbatim)
-REPO_DIR=$HOME/AI-Scientist-v2 bash scripts/setup_adroit.sh
+bash scripts/setup_adroit.sh                   # clones into $REPO_DIR, builds env on scratch
 ```
+
+The script pins the anaconda module, sources conda properly, and wraps `conda activate`
+in `set +u` (Adroit's conda trips the `PS1: unbound variable` error otherwise).
 
 ## 2. Secrets (never commit these)
 
@@ -47,7 +57,7 @@ source ~/.ai_scientist_secrets
 ## 3. Wire the Sandbox into the repo (the $0 patch)
 
 ```bash
-python scripts/wire_sandbox.py --repo $HOME/AI-Scientist-v2
+python scripts/wire_sandbox.py --repo $REPO_DIR
 # patches ai_scientist/llm.py AND treesearch/backend/backend_openai.py (idempotent).
 # If an anchor isn't found, it tells you to patch by hand (see report.md Part D).
 ```
@@ -67,6 +77,10 @@ print("sandbox says:", r.choices[0].message.content)
 PY
 ```
 
+> Run this smoke test **on the login node** (it reaches the Sandbox over general
+> internet — no proxy module needed there). The definitive *compute-node* check is built
+> into the SLURM scripts, since that's where the GPU job actually makes its calls.
+
 ## 4. Copy the two idea topics into the repo and generate idea JSONs
 
 The launcher consumes a `*.json` idea file (and, with `--load_code`, a same-named
@@ -74,7 +88,7 @@ The launcher consumes a `*.json` idea file (and, with `--load_code`, a same-name
 or free via the Sandbox since ideation also goes through the patched OpenAI path):
 
 ```bash
-cd $HOME/AI-Scientist-v2
+cd $REPO_DIR
 cp ~/zlab-training/ai-scientist-v2/ideas/topic_baseline.md ai_scientist/ideas/
 cp ~/zlab-training/ai-scientist-v2/ideas/topic_concrete.md ai_scientist/ideas/
 
@@ -92,21 +106,43 @@ done
 > only the debug knobs differ. For **E2** the idea *is* the variable — `topic_baseline`
 > (vague) vs `topic_concrete` (pinned).
 
+### 4b. Pre-fetch datasets ON THE LOGIN NODE (compute nodes can't download)
+
+The LLM-written experiment code will try to download datasets at runtime (e.g.
+torchvision CIFAR-10). On a compute node that download is blocked (no general internet).
+So fetch them once on the login node into a scratch path the job will reuse:
+
+```bash
+export CIFAR_DIR=/scratch/network/$USER/data
+python - <<PY
+import os, torchvision
+root = os.environ["CIFAR_DIR"]
+torchvision.datasets.CIFAR10(root=root, train=True,  download=True)
+torchvision.datasets.CIFAR10(root=root, train=False, download=True)
+print("CIFAR-10 cached under", root)
+PY
+```
+
+The SLURM scripts export `CIFAR_DIR`; `topic_concrete.md` tells the agent to use
+torchvision CIFAR-10, which will find the cached copy instead of downloading. If your
+idea needs a different dataset, pre-fetch it here too. Also export `HF_HOME` /
+`HF_DATASETS_CACHE` to a scratch path and pre-pull any HuggingFace datasets on login.
+
 ## 5. Build the config variants
 
 ```bash
 cd ~/zlab-training/ai-scientist-v2
-mkdir -p $HOME/AI-Scientist-v2/configs
+mkdir -p $REPO_DIR/configs
 
 # E1: deeper/greedier debugging (the only change vs baseline) + cheap + sandbox
-python scripts/apply_experiment_config.py --config $HOME/AI-Scientist-v2/bfts_config.yaml \
-  --preset E1 --small --sandbox --out $HOME/AI-Scientist-v2/configs/E1_debug8.yaml
-python scripts/apply_experiment_config.py --config $HOME/AI-Scientist-v2/bfts_config.yaml \
-  --preset baseline --small --sandbox --out $HOME/AI-Scientist-v2/configs/E1_baseline.yaml
+python scripts/apply_experiment_config.py --config $REPO_DIR/bfts_config.yaml \
+  --preset E1 --small --sandbox --out $REPO_DIR/configs/E1_debug8.yaml
+python scripts/apply_experiment_config.py --config $REPO_DIR/bfts_config.yaml \
+  --preset baseline --small --sandbox --out $REPO_DIR/configs/E1_baseline.yaml
 
 # E2: identical config for both arms (the idea .md is the variable)
-python scripts/apply_experiment_config.py --config $HOME/AI-Scientist-v2/bfts_config.yaml \
-  --preset baseline --small --sandbox --out $HOME/AI-Scientist-v2/configs/E2_baseline.yaml
+python scripts/apply_experiment_config.py --config $REPO_DIR/bfts_config.yaml \
+  --preset baseline --small --sandbox --out $REPO_DIR/configs/E2_baseline.yaml
 ```
 
 `--small` lowers stage iters and sets `num_drafts=1`; `--sandbox` moves the experiment
@@ -119,9 +155,9 @@ The SLURM scripts copy the right variant over `bfts_config.yaml`, source your se
 and use Sandbox model names for all launcher flags.
 
 ```bash
-cp ~/zlab-training/ai-scientist-v2/slurm/run_E1.slurm $HOME/AI-Scientist-v2/
-cp ~/zlab-training/ai-scientist-v2/slurm/run_E2.slurm $HOME/AI-Scientist-v2/
-cd $HOME/AI-Scientist-v2
+cp ~/zlab-training/ai-scientist-v2/slurm/run_E1.slurm $REPO_DIR/
+cp ~/zlab-training/ai-scientist-v2/slurm/run_E2.slurm $REPO_DIR/
+cd $REPO_DIR
 
 # E1 baseline vs deep-debug: run twice, swapping the cp line / config (edit in-script).
 sbatch run_E1.slurm
@@ -141,7 +177,7 @@ tail -f slurm-<jobid>.out
 ## 7. Mine the trees (Part B)
 
 ```bash
-cd $HOME/AI-Scientist-v2
+cd $REPO_DIR
 
 # success/failure + node counts across all runs:
 ~/zlab-training/ai-scientist-v2/scripts/triage_runs.sh experiments
@@ -171,10 +207,16 @@ Put two filled failure-node rows + the A/B result into the Part F tables in
 
 | Symptom | Fix |
 |---|---|
-| `NO INTERNET` after salloc | you're on a login node, or forgot `module load proxy/default` (compute node only) |
+| `module load anaconda3` → "No default version" | pin a version: `module load anaconda3/2024.6` (`module avail anaconda3` to list) |
+| `PS1: unbound variable` during conda activate | `set +u` before `conda activate`, `set -u` after — the kit scripts already do this |
+| github clone `403` on a compute node | expected — clone on the **login node** (general internet); compute nodes are allowlist-only |
+| `curl https://api-ai-sandbox.princeton.edu/` → 502 | not a failure — a bare `/` isn't a valid path. Test with the AzureOpenAI smoke call instead |
+| `salloc` fails with `--partition=mig` | there is no `mig` partition; use `--partition=gpu --gres=gpu:3g.20gb:1` (MIG slice) |
+| dataset download hangs/fails inside the job | pre-fetch it on the login node (step 4b); compute nodes can't download |
 | `KeyError: AI_SANDBOX_KEY` | `source ~/.ai_scientist_secrets` in the same shell / SLURM script |
 | calls hit public OpenAI / 401 | `USE_AI_SANDBOX` not exported, or `wire_sandbox.py` not run, or a `claude-` model name slipped through (those skip the Sandbox by design) |
 | `wire_sandbox.py` "anchor not found" | repo drifted; patch the two functions by hand per report.md Part D |
 | CUDA OOM | use `topic_concrete.json` (pins batch/model) — that's E2; or drop batch to 64 in the idea `.md` |
 | Bedrock/AWS error | you left the experiment model on Claude — rebuild the config with `--sandbox` |
 | ideation/launcher rejects a model name | the Sandbox name must reach the OpenAI branch (no `claude-` substring); `gpt-4o`/`o3-mini` are safe |
+| `$REPO_DIR` empty in a new shell | re-`export REPO_DIR=...` (and `CONDA_ENVS_DIR`, `ANACONDA_MODULE`) — or add them to `~/.ai_scientist_secrets` |

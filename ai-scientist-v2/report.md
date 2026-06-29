@@ -301,11 +301,31 @@ by hand as shown above.
 
 ## Part E — Adroit / SLURM gotchas (the ones that actually bite)
 
-- **Outbound internet is off by default on compute nodes.** `module load proxy/default`
-  on the *compute* node (not login). The scripts sanity-check this with a `curl`. If it
-  still fails after the module load, that is a legitimate finding to document and raise
-  with RC/Taiming — and note that some traffic from the LLM-*written* code may not honor
-  the proxy env vars, another reason to keep runs small and watched.
+- **Network topology is the opposite of the naive assumption (verified June 2026).**
+  The **login node** (`adroit-vis`) has general outbound internet — `git clone`, `pip`,
+  `conda`, and dataset downloads work there. **Compute nodes do not**: `module load
+  proxy/default` opens only a small **pre-approved API allowlist**. Evidence: a github
+  clone on a compute node returns **403** (blocked), while the Sandbox host returns
+  **502** to a bare `curl /` (reached, but `/` isn't a valid endpoint — *not* blocked;
+  blocked would be 403). Consequences baked into the kit:
+  - Do **all setup + dataset pre-fetch on the login node** (`setup_adroit.sh` refuses to
+    run if github is unreachable, i.e. if you're on a compute node).
+  - The GPU **job** runs on a compute node and makes its LLM calls there, so the Sandbox
+    must be allow-listed for compute nodes. A bare curl can't prove that; the SLURM
+    scripts run a real `AzureOpenAI.chat.completions.create` smoke test and abort early
+    if it fails (so you don't burn a job slot). If it *does* fail, that's a finding to
+    raise with RC — ask them to allowlist `api-ai-sandbox.princeton.edu` for compute nodes.
+  - LLM-*written* code that tries to download data at runtime will fail on the compute
+    node; pre-fetch datasets on the login node (`CIFAR_DIR`, `HF_HOME` on scratch).
+- **Two conda gotchas.** `module load anaconda3` errors with "No default version" — pin
+  one (`anaconda3/2024.6`). And conda's activate script trips `set -u` with
+  `PS1: unbound variable` — wrap activation in `set +u; conda activate …; set -u`. Both
+  fixed in the kit scripts.
+- **Partition/gres.** There is no `mig` partition; GPUs are in **`gpu`**. A MIG A100
+  slice (~20GB, plenty for the ResNet-18 E2 idea) is `--partition=gpu --gres=gpu:3g.20gb:1`;
+  a full A100 is `--gres=gpu:1 --constraint=a100`.
+- **/home quota is small (~20GB).** Put the repo and the conda env on scratch
+  (`REPO_DIR`, `CONDA_ENVS_DIR` under `/scratch/network/$USER`).
 - **Config keys are nested, and defaults differ from the runbook.** The runbook's flat
   snippet (`num_workers`, `steps`, `max_debug_depth`, …) maps onto nested keys; real
   defaults are `num_workers: 4` (runbook says 3) and `steps: 5` with per-stage caps

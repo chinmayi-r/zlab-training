@@ -3,34 +3,44 @@
 # A/B partner of run_E2 / a baseline run. Only ONE variable changes vs baseline:
 # agent.search.max_debug_depth 3->8 and debug_prob 0.5->0.9 (see configs/E1_debug8.yaml).
 #
-# VERIFY the #SBATCH lines against Adroit's current docs (partition name, gres
-# syntax, undergrad time limits). These mirror the lab's nano-vllm setup.
+# #SBATCH lines verified against Adroit `snodes`/`sinfo` (June 2026): GPUs are in the
+# 'gpu' partition; MIG A100 slices are gres `3g.20gb` (~20GB) on adroit-h11g2.
 #SBATCH --job-name=ai_sci_E1
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
-#SBATCH --gres=gpu:1            # MIG A100 slice or V100; check Adroit's exact gres/constraint
-#SBATCH --time=06:00:00         # runs take hours; check undergrad limits
-#SBATCH --partition=mig         # verify partition name
+#SBATCH --partition=gpu                 # Adroit GPUs live here (NOT 'mig')
+#SBATCH --gres=gpu:3g.20gb:1            # one MIG A100 slice (~20GB). Full A100: --gres=gpu:1 --constraint=a100
+#SBATCH --time=06:00:00                 # gpu partition allows up to 7 days; keep runs small
 #SBATCH --output=slurm-%j.out
 #SBATCH --error=slurm-%j.err
 
 set -euo pipefail
 
 module purge
-module load proxy/default               # outbound internet + Sandbox access (COMPUTE node only)
-module load anaconda3/2024.6 2>/dev/null || module load anaconda3
-conda activate ai_scientist
+module load proxy/default               # compute-node API allowlist (incl. the Sandbox)
+module load "${ANACONDA_MODULE:-anaconda3/2024.6}"
+source "$(conda info --base)/etc/profile.d/conda.sh"
+set +u; conda activate "${ENV_NAME:-ai_scientist}"; set -u   # set +u avoids PS1-unbound
 
 source ~/.ai_scientist_secrets          # keys incl. AI_SANDBOX_KEY + USE_AI_SANDBOX
 
-REPO="$HOME/AI-Scientist-v2"
+REPO="${REPO_DIR:-$HOME/AI-Scientist-v2}"
 cd "$REPO"
 
-# Sanity before burning a job slot
-curl -sSf https://api-ai-sandbox.princeton.edu >/dev/null 2>&1 \
-  && echo "sandbox reachable" || echo "WARN: sandbox not reachable from this node"
+# Real Sandbox reachability test from THIS compute node. A `curl /` returns 502 even
+# when the Sandbox works (bare root isn't a valid endpoint) -- only a real call proves it.
+python - <<'PY' || { echo "ABORT: Sandbox not reachable from compute node; ask RC to allowlist api-ai-sandbox.princeton.edu"; exit 1; }
+import os
+from openai import AzureOpenAI
+c = AzureOpenAI(api_key=os.environ["AI_SANDBOX_KEY"],
+                azure_endpoint=os.environ.get("SANDBOX_ENDPOINT","https://api-ai-sandbox.princeton.edu/"),
+                api_version=os.environ.get("SANDBOX_API_VERSION","2025-03-01-preview"))
+r = c.chat.completions.create(model="gpt-4o-mini", max_tokens=5,
+        messages=[{"role":"user","content":"ok"}])
+print("sandbox OK:", r.choices[0].message.content)
+PY
 
 # Use the E1 variant (generate it once with apply_experiment_config.py --preset E1 --small --sandbox)
 cp configs/E1_debug8.yaml bfts_config.yaml

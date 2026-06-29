@@ -4,29 +4,45 @@
 # pins dataset + model size + exact metric + compute budget; topic_baseline.md is vague.
 # Same config (configs/E2_baseline.yaml), same seed. Doubles as the CUDA-OOM fix.
 #
-# VERIFY the #SBATCH lines against Adroit's current docs.
+# #SBATCH lines verified against Adroit `snodes`/`sinfo` (June 2026).
 #SBATCH --job-name=ai_sci_E2
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
-#SBATCH --gres=gpu:1            # MIG A100 slice or V100; verify
+#SBATCH --partition=gpu                 # Adroit GPUs live here (NOT 'mig')
+#SBATCH --gres=gpu:3g.20gb:1            # one MIG A100 slice (~20GB). Full A100: --gres=gpu:1 --constraint=a100
 #SBATCH --time=06:00:00
-#SBATCH --partition=mig         # verify partition name
 #SBATCH --output=slurm-%j.out
 #SBATCH --error=slurm-%j.err
 
 set -euo pipefail
 
 module purge
-module load proxy/default
-module load anaconda3/2024.6 2>/dev/null || module load anaconda3
-conda activate ai_scientist
+module load proxy/default                  # compute-node API allowlist (incl. the Sandbox)
+module load "${ANACONDA_MODULE:-anaconda3/2024.6}"
+source "$(conda info --base)/etc/profile.d/conda.sh"
+set +u; conda activate "${ENV_NAME:-ai_scientist}"; set -u   # set +u avoids PS1-unbound
 
-source ~/.ai_scientist_secrets
+source ~/.ai_scientist_secrets             # keys incl. AI_SANDBOX_KEY + USE_AI_SANDBOX
 
-REPO="$HOME/AI-Scientist-v2"
+REPO="${REPO_DIR:-$HOME/AI-Scientist-v2}"
 cd "$REPO"
+
+# Real Sandbox check from this compute node (curl '/' gives a misleading 502).
+python - <<'PY' || { echo "ABORT: Sandbox unreachable from compute node; ask RC to allowlist it"; exit 1; }
+import os
+from openai import AzureOpenAI
+c = AzureOpenAI(api_key=os.environ["AI_SANDBOX_KEY"],
+                azure_endpoint=os.environ.get("SANDBOX_ENDPOINT","https://api-ai-sandbox.princeton.edu/"),
+                api_version=os.environ.get("SANDBOX_API_VERSION","2025-03-01-preview"))
+print("sandbox OK:", c.chat.completions.create(model="gpt-4o-mini", max_tokens=5,
+        messages=[{"role":"user","content":"ok"}]).choices[0].message.content)
+PY
+
+# Datasets must be pre-fetched on the LOGIN node -- compute nodes can't download.
+# See experiments.md step 4b. (CIFAR-10 example for topic_concrete.)
+export CIFAR_DIR="${CIFAR_DIR:-/scratch/network/$USER/data}"
 
 cp configs/E2_baseline.yaml bfts_config.yaml
 
