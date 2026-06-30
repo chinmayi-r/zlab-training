@@ -101,11 +101,14 @@ at any of three very different stages (see Part B).
 
 ### A.5 Bridge to the failure cases: where is the bottleneck?
 
-Tie-off (filled in once Part B/C are done): across the runs I mined, the bottleneck is
-predominantly **execution / tool-use** — the agent has reasonable ideas and writes
-plausible code, but loses runs to setup and debugging failures (environment, data
-loading, OOM, repeated re-submission of broken code) rather than to bad ideation or bad
-evaluation. If that holds, the highest-leverage investment is **execution scaffolding**
+Tie-off (now filled from the runs in Parts F/F′/G): across both the Adroit and the local
+runs the bottleneck is **execution / tool-use**, never ideation or model capability. On
+Adroit it shows up as a blocked-download confound the feedback loop can't escape (G.1–G.4);
+on open internet, with that confound removed, it shows up as the agent picking the wrong
+data API (`HfUriError` instead of the pinned torchvision loader, G.6). Both are *tool-use*
+failures; a 6× stronger coder (gpt-4o vs gpt-4o-mini) changed nothing, ruling out
+capability. The agent has reasonable ideas and writes plausible code, but loses runs to
+setup/data-loading/debugging failures rather than to bad ideation or bad evaluation. If that holds, the highest-leverage investment is **execution scaffolding**
 (better debugging strategy, OOM handling, a minimal correct starter scaffold) — which
 is interesting because it is *exactly the scaffolding v2 deliberately removed*. The
 research idea hiding here: **selective scaffolding** — keep the open-ended ideation/search
@@ -393,6 +396,35 @@ slice. `--skip_writeup --skip_review`, `generate_report=false`.
 
 ---
 
+## Part F′ — Data recorded (LOCAL, open internet — the clean A/B counterpart)
+
+Same idea family, same agent, **one variable changed: the network**. Run on a local
+Windows + RTX-3050 box via WSL2 (`local/`), open home internet, personal OpenAI key
+reached directly (no proxy, no Sandbox, no SLURM). `gpt-4o` coder, `gpt-4o-mini`
+feedback/VLM, `--skip_writeup --skip_review`, `generate_report=false`, `exec.timeout=120`.
+The fast/GPU-explicit idea (`ideas/topic_concrete_fast.json`: 3 epochs, 1 seed, 3 arms)
+so nodes finish in seconds; CIFAR-10 pre-cached under `$CIFAR_DIR`.
+
+### Per run
+
+| run | idea | exp model | env | stage mined | total nodes | working/buggy | abandoned leaves | top error classes | result |
+|---|---|---|---|---|---|---|---|---|---|
+| L1 | topic_concrete_fast | gpt-4o | **local, open internet** | stage_2_baseline_tuning | 9 | **2 / 7** | 7 | 2 `HfUriError`, 1 `DatasetNotFoundError` | **working nodes — real ResNet-18 training, 28.61% top-1 val acc** |
+
+Contrast with Part F: on Adroit (no internet) the *identical* agent on the *same* idea
+got **0 working / 14** with the plurality `URLError 403`. The only change between the two
+data points is the network wall. That is the clean experimental result.
+
+### Per node (local)
+
+| node id | stage | is_buggy | what happened | classification |
+|---|---|---|---|---|
+| 2af6738… (L1 n0) | draft | **False (working)** | loaded the cached CIFAR-10, trained ResNet-18, returned a real top-1 metric (28.61%) | success — the network confound removed, the agent's code runs |
+| 3852733… (L1 n2) | draft/improve | **False (working)** | second viable node | success |
+| (7 buggy leaves) | debug | True | reached for a **HuggingFace** dataset path instead of the cached torchvision CIFAR — `HfUriError` / `DatasetNotFoundError` (HF is also unreachable / the URI is malformed) | **tool-use** — intrinsic agent signal, *not* the environment wall |
+
+---
+
 ## Part G — Findings (the deep dive)
 
 Three runs (two analyzed, one pending) on the pinned CIFAR-10 / ResNet-18 idea, plus the
@@ -445,11 +477,30 @@ into progress. This is exactly the scaffolding v2 *removed* relative to v1 — e
 that removing structure is not free, and that the useful middle ground is generic
 setup-scaffolding, not per-domain templates.
 
-> **Cleaner data, next:** every run here is contaminated by the no-internet confound. To
-> observe the agent's *intrinsic* coding/debug failures, re-run on open internet (a local
-> RTX-3050 box via WSL2, or Colab) — see `local/`. That removes the download wall so the
-> remaining failures are genuine agent signal, giving a clean second data point against
-> these Adroit runs.
+**G.6 The local open-internet run confirms the confound — and surfaces a *real* tool-use
+failure underneath it.** Re-running the same agent on the same idea with the only change
+being open internet (Part F′, L1) flips the outcome: **2 working nodes vs. 0 on Adroit**,
+including a node that actually trained ResNet-18 to a real **28.61% top-1** metric. This
+is the clean A/B that isolates the network as the dominant Adroit variable — same model,
+same idea, same framework, opposite result. *But* the 7 buggy leaves that remain are now
+**genuine agent signal, not infrastructure**: instead of `URLError 403`, they fail with
+`HfUriError` / `DatasetNotFoundError` — the agent reaching for a **HuggingFace** dataset
+path in the baseline-tuning stage even though the idea pins torchvision CIFAR-10 and the
+data is already cached locally. That is a true **tool-use** failure (wrong data API, not a
+blocked network), and it is exactly the intrinsic signal the Adroit confound had been
+masking. So the two data points together say: (a) most "agent failure" on the locked-down
+cluster was infrastructure (G.1–G.3); (b) once you remove it, the residual failures are
+real but different — sloppy tool/data-API selection — which is again a *tool-use* axis
+result, reinforcing G.5's selective-scaffolding fix (a thin data-loading scaffold would
+kill both the `URLError` and the `HfUriError` class at once).
+
+> **Reproduce the local clean run:** `local/setup_local.sh` then `local/run_local.sh`
+> (WSL2 + RTX-3050, open internet, OpenAI key). Mine with
+> `scripts/mine_journal.py <run>/logs/0-run/`. The two contaminated-vs-clean data points
+> (Adroit 0/14 `URLError` vs. local 2/7 with `HfUriError`) are the report's core evidence.
+> One robustness note from the local run: Stage-4 (multi-model ablation) nodes can exceed
+> a short `exec.timeout` and re-loop; bump `exec.timeout` (≥600s) if you want Stage 4 to
+> finish, or stop after Stages 1–3, which already produce working nodes.
 
 ---
 
