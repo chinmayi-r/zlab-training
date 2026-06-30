@@ -17,14 +17,18 @@ cd "$REPO_DIR"
 # Pre-cache CIFAR once (open internet here) so the 14 nodes don't each re-download.
 python -c "import torchvision as tv,os; r=os.environ['CIFAR_DIR']; tv.datasets.CIFAR10(r,train=True,download=True); tv.datasets.CIFAR10(r,train=False,download=True); print('CIFAR cached at',r)"
 
-# Idea + cheap config (gpt-4o coder; switch all to gpt-4o-mini to cut cost to ~cents).
-cp "$KIT/ideas/topic_concrete_local.json" "$KIT/ideas/topic_baseline.json" ai_scientist/ideas/
+# Idea (default = the fast/GPU-explicit smoke idea so nodes finish in seconds, not hours;
+# override with IDEA_FILE=topic_concrete_local.json for the full 30-epoch protocol).
+IDEA_FILE="${IDEA_FILE:-topic_concrete_fast.json}"
+cp "$KIT/ideas/$IDEA_FILE" ai_scientist/ideas/
+
+# Cheap config (gpt-4o coder; switch all to gpt-4o-mini to cut cost to ~cents).
 COMMON="--set agent.code.model=gpt-4o --set agent.feedback.model=gpt-4o-mini --set agent.vlm_feedback.model=gpt-4o-mini --set report.model=gpt-4o-mini --set generate_report=false"
 python "$KIT/scripts/apply_experiment_config.py" --config bfts_config.yaml --preset baseline --small $COMMON --out /tmp/bfts_local.yaml
 cp /tmp/bfts_local.yaml bfts_config.yaml
 
 python launch_scientist_bfts.py \
-  --load_ideas ai_scientist/ideas/topic_concrete_local.json \
+  --load_ideas "ai_scientist/ideas/$IDEA_FILE" \
   --skip_writeup --skip_review
 
 echo
