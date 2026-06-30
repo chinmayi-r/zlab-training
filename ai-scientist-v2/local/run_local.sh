@@ -23,7 +23,9 @@ IDEA_FILE="${IDEA_FILE:-topic_concrete_fast.json}"
 cp "$KIT/ideas/$IDEA_FILE" ai_scientist/ideas/
 
 # Cheap config (gpt-4o coder; switch all to gpt-4o-mini to cut cost to ~cents).
-COMMON="--set agent.code.model=gpt-4o --set agent.feedback.model=gpt-4o-mini --set agent.vlm_feedback.model=gpt-4o-mini --set report.model=gpt-4o-mini --set generate_report=false"
+# exec.timeout=120 -> a hung/deadlocked node fails fast (2 min) instead of blocking an
+# hour, so the whole tree completes in minutes even in the worst case.
+COMMON="--set agent.code.model=gpt-4o --set agent.feedback.model=gpt-4o-mini --set agent.vlm_feedback.model=gpt-4o-mini --set report.model=gpt-4o-mini --set generate_report=false --set exec.timeout=120"
 python "$KIT/scripts/apply_experiment_config.py" --config bfts_config.yaml --preset baseline --small $COMMON --out /tmp/bfts_local.yaml
 cp /tmp/bfts_local.yaml bfts_config.yaml
 
