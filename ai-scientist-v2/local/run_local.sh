@@ -9,7 +9,9 @@ ENV_NAME="${ENV_NAME:-ai_scientist}"
 KIT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # the ai-scientist-v2 kit dir
 export CIFAR_DIR="${CIFAR_DIR:-$HOME/data}"              # shared dataset cache across nodes
 
-source "$(conda info --base)/etc/profile.d/conda.sh"; conda activate "$ENV_NAME"
+CONDA_BASE="$($HOME/miniconda3/bin/conda info --base 2>/dev/null || conda info --base 2>/dev/null)"
+source "$CONDA_BASE/etc/profile.d/conda.sh"
+conda activate "$ENV_NAME"
 cd "$REPO_DIR"
 
 # Pre-cache CIFAR once (open internet here) so the 14 nodes don't each re-download.
