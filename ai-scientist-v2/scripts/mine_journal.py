@@ -37,10 +37,13 @@ import sys
 def load_journal(path):
     """Accept a journal file or a directory; return the list of node dicts."""
     if os.path.isdir(path):
+        # Look at the top level, then recurse (the journal often lives in a
+        # stage_*/ subdir, e.g. logs/0-run/stage_1_.../journal.json).
         cands = (glob.glob(os.path.join(path, "journal*.json"))
-                 or glob.glob(os.path.join(path, "*.json")))
+                 or glob.glob(os.path.join(path, "*.json"))
+                 or glob.glob(os.path.join(path, "**", "journal*.json"), recursive=True))
         if not cands:
-            sys.exit(f"No *.json journal found under {path}")
+            sys.exit(f"No journal.json found under {path} (searched recursively)")
         path = cands[0]
         print(f"Using journal: {path}", file=sys.stderr)
     with open(path) as f:
@@ -59,7 +62,10 @@ def node_id(n):
 
 
 def parent_id(n):
-    p = n.get("parent")
+    # Real journal.json uses "parent_id"; older/alt forms may use "parent".
+    p = n.get("parent_id")
+    if p is None:
+        p = n.get("parent")
     if isinstance(p, dict):
         return p.get("id", "")
     return p or ""
