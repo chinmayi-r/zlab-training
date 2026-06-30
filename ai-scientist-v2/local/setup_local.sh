@@ -17,6 +17,11 @@ if ! command -v conda >/dev/null 2>&1; then
 fi
 source "$($HOME/miniconda3/bin/conda info --base 2>/dev/null || conda info --base)/etc/profile.d/conda.sh"
 
+# Newer conda requires accepting the default channels' Terms of Service before it will
+# create an env from them. Accept non-interactively (no-op if already accepted).
+conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main 2>/dev/null || true
+conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r 2>/dev/null || true
+
 echo "==> clone repo into $REPO_DIR"
 [ -d "$REPO_DIR" ] || git clone https://github.com/SakanaAI/AI-Scientist-v2.git "$REPO_DIR"
 
