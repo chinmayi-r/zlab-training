@@ -367,23 +367,89 @@ no `--model` or `--seed` flag on the launcher; the experiment model lives in
 
 ---
 
-## Part F — Data to record
+## Part F — Data recorded (Adroit, June 2026)
+
+Backend reality: the Princeton AI Sandbox API (`api-ai-sandbox.princeton.edu`) was
+**retired** mid-2026 (RC confirmed: replaced by a Portkey gateway), so the `$0` route
+in Parts D/E is dead as written; these runs used a personal **OpenAI** key reached
+through `module load proxy/default` (the proxy allow-lists OpenAI/Anthropic/Gemini, but
+**not** the Sandbox, HuggingFace, or Semantic Scholar). GPU: one MIG A100 `3g.20gb`
+slice. `--skip_writeup --skip_review`, `generate_report=false`.
 
 ### Per run
 
-| run | idea | exp model | num_workers | stage1_iters | num_drafts | max_debug_depth | debug_prob | total nodes | working/buggy | PDF? | wall-clock | approx $ |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| baseline | | | | | | 3 | 0.5 | | | | | |
-| E1 | | | | | | 8 | 0.9 | | | | | |
-| E2-vague | topic_baseline | | | | | | | | | | | |
-| E2-concrete | topic_concrete | | | | | | | | | | | |
+| run | idea | exp model | num_drafts | stage1_iters | max_debug_depth | debug_prob | total nodes | working/buggy | PDF? | notes |
+|---|---|---|---|---|---|---|---|---|---|---|
+| R1 | topic_concrete | gpt-4o-mini | 1 | 14 | 3 | 0.5 | 14 | **0 / 14** | no | 7 URLError, 3 ModuleNotFound, 2 SystemExit, 1 NameError, 1 FileNotFound |
+| R2 | topic_concrete | **gpt-4o** | 1 | 14 | 3 | 0.5 | 14 | **0 / 14** | no | 8 URLError, 4 RuntimeError, 1 FileNotFound, 1 ModuleNotFound |
+| R3 | topic_concrete (offline note in **Abstract**) | gpt-4o | 1 | 14 | 3 | 0.5 | _pending_ | | | tests whether surfacing the constraint unblocks it |
 
-### Per failure node (the heart of the report — aim for ≥2 filled rows)
+### Per failure node (representative)
 
-| node id | stage | what it tried (plan) | error class | # debug attempts | outcome | my classification | proposed intervention |
-|---|---|---|---|---|---|---|---|
-| | | | | | abandoned / fixed | task-spec / capability / tool-use | |
-| | | | | | | | |
+| node id | stage | what it tried | error class | outcome | classification | proposed intervention |
+|---|---|---|---|---|---|---|
+| a0f9641… (R2 n0) | draft | load CIFAR-10 via torchvision, `download=True` | `URLError: Tunnel connection failed: 403 Forbidden` | abandoned | **tool-use / environment** (agent defaults to a download the cluster forbids) | surface offline-load constraint in the prompt; or `--load_code` data scaffold |
+| 263be77… (R2 n9→debug) | debug | reviewer said *"set download=True … ensure internet access"*, retried download | `URLError` 403 again | abandoned | **tool-use (feedback misdiagnosis)** | environment-aware feedback that recognizes a blocked-network signal |
+
+---
+
+## Part G — Findings (the deep dive)
+
+Three runs (two analyzed, one pending) on the pinned CIFAR-10 / ResNet-18 idea, plus the
+long setup trail, yield a concrete answer to Part A's question — *is the bottleneck
+ideation, execution, or evaluation?*
+
+**G.1 The bottleneck is execution, and specifically tool-use under an environment
+constraint — not ideation or model capability.**
+Across R1 (gpt-4o-mini) and R2 (gpt-4o) the outcome is *identical*: 14 nodes, **zero
+working**, the plurality of failures `URLError: …403 Forbidden` from the agent's code
+calling `torchvision…CIFAR10(download=True)` against a no-internet compute node. A 6×
+stronger coder changed nothing — a clean **capability isolator (E3)**: this is *not* a
+model-capability failure. Ideation was never the issue either (the idea is fully
+specified). The wall is *setup/execution*.
+
+**G.2 The debug loop cannot escape an environment failure because the feedback model
+misdiagnoses it.** The verbatim reviewer output on the buggy nodes was *"set
+`download=True` … ensure the environment has internet access"* — advice that is
+impossible on the cluster and, where the agent had already tried `download=True`, sends
+it in a circle. So the agentic tree search burns its whole iteration budget re-issuing a
+call that can never succeed. This is a specific, citable **tool-use failure mode**:
+the evaluator's root-cause attribution is wrong, so debugging is misdirected. (Good
+hook for the *Why LLMs Aren't Scientists Yet* vocabulary.)
+
+**G.3 A large fraction of "agent failure" on a restricted cluster is really
+infrastructure.** 7/14 (R1) and 8/14 (R2) failures were the blocked download; the rest
+(`ModuleNotFound` = a package not installed and un-`pip`-installable offline,
+`FileNotFound`, `RuntimeError`) are also partly environment-shaped. The runbook's
+"confound" is the dominant signal here. This is itself a result: evaluating open-ended
+agents on a locked-down HPC environment measures the environment as much as the agent.
+
+**G.4 The framework is brittle at the no-good-node boundary.** With zero working nodes,
+the best-node selector picks arbitrarily ("all metrics are `nan`… selecting the first by
+default"), and the run then crashes in `log_summarization.overall_summarize`
+(`ValueError: not enough values to unpack`) / `shutil.rmtree(... experiment_results)`
+(`FileNotFoundError`). Setting `generate_report=false` sidesteps it. Worth noting as a
+robustness gap when an idea is infeasible in the given environment.
+
+**G.5 Intervention and the research idea.** The fix that the diagnosis points to is
+**selective scaffolding**: keep v2's open-ended ideation/search, but re-introduce a thin,
+generic *execution* scaffold for setup (here: a correct offline data-loader, or simply
+surfacing the environment constraint in the prompt the agent actually reads — note the
+launcher's `task_desc` passes only Title+Abstract+Short Hypothesis, **not** the
+`Experiments` field, so constraints placed there are invisible to the coder). R3 tests
+the cheapest version of this (constraint moved into the Abstract). The broader bet — the
+"research idea from this" Taiming hinted at — is **environment-aware agents/feedback**:
+a reviewer that recognizes a `403/URLError/Tunnel` signature as "network is blocked, stop
+retrying downloads, use the local cache" would convert a whole class of dead debug loops
+into progress. This is exactly the scaffolding v2 *removed* relative to v1 — evidence
+that removing structure is not free, and that the useful middle ground is generic
+setup-scaffolding, not per-domain templates.
+
+> **Cleaner data, next:** every run here is contaminated by the no-internet confound. To
+> observe the agent's *intrinsic* coding/debug failures, re-run on open internet (a local
+> RTX-3050 box via WSL2, or Colab) — see `local/`. That removes the download wall so the
+> remaining failures are genuine agent signal, giving a clean second data point against
+> these Adroit runs.
 
 ---
 
