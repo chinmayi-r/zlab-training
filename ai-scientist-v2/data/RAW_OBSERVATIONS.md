@@ -62,9 +62,29 @@ stage1 = 14 iters, `max_debug_depth=3`, `debug_prob=0.5`, GPU = 1x MIG A100 `3g.
   `generate_report=false` avoided this.
 
 ### R3 — coder = gpt-4o, offline note moved into the idea **Abstract**
-- STATUS: launched to test whether surfacing the constraint helps; final node
-  counts NOT captured in chat. **Go pull this off Adroit** (it may or may not have
-  finished). If it never ran to completion, mark it incomplete in the report.
+- STATUS: **NEVER RUN.** Scratch has only two AI-Scientist-v2 experiment dirs
+  (`2026-06-29_13-18-30` = R1, `2026-06-30_00-51-48` = R2). There is no third run.
+  The report's R3 row is a planned-but-not-executed variant; do not cite numbers for it.
+
+### Preflight logs (verbatim, in `data/adroit/slurm_preflight_logs/`)
+- `sbx-3290184.out` (Sandbox reachability): `httpx.ProxyError: 502 Proxy Error` →
+  `openai.APIConnectionError: Connection error.` — the retired Princeton Sandbox is
+  unreachable through `proxy/default`.
+- `oai-3290212.out` (OpenAI reachability through the proxy):
+  `host: adroit-h11n2  https_proxy=http://adroit-proxy:8080` then
+  `gpt-4o-mini: SUCCESS -> ok` and `gpt-4o: SUCCESS -> Ok`. OpenAI works through the proxy;
+  this is why the runs used a personal OpenAI key, not the Sandbox.
+- The proxy banner it printed: *"Http proxy settings allow access to a very limited and
+  pre-approved list of internet API servers ... General internet access is not supported."*
+
+### R2 per-node (from the committed CSV; all 14 are `draft`, all `is_buggy=True`)
+- node ids + exc_type: `a0f9641…` URLError, `6949afae…` RuntimeError, `fa89047f…` URLError,
+  `f2bc5eb9…` FileNotFoundError, `9c1a8512…` URLError, `4628c940…` URLError,
+  `7dc77b13…` RuntimeError, `fd03f120…` URLError, `151744d3…` ModuleNotFoundError,
+  `263be772…` URLError, `69431232…` URLError, `5308fae8…` RuntimeError,
+  `cf2fa248…` URLError, `01675466…` RuntimeError.
+- every traceback's first frame is
+  `ai_scientist/treesearch/interpreter.py` (the sandboxed exec wrapper).
 
 ---
 
@@ -112,14 +132,24 @@ feedback/VLM = gpt-4o-mini, `exec.timeout=120`, `generate_report=false`,
 
 ---
 
-## 4. What is STILL MISSING (checklist before this report is "backed by data")
+## 4. Collection status (what is now backed by real files in the repo)
 
-- [ ] Pull R1/R2/R3 run dirs off Adroit -> `data/adroit/` (journals + tree_viz.html + console log)
-- [ ] Confirm R3's final node counts (was it finished?)
-- [ ] Pull L1 run dir off your PC -> `data/local/` (all stage journals + the 28.61% node)
-- [ ] Mine each journal with `scripts/mine_journal.py` -> commit the per-run CSVs
+- [x] Pulled R1/R2 run dirs off Adroit -> `data/adroit/` (journals + CSVs + tree_viz.html)
+- [x] Confirmed R3 was NEVER run (only 2 Adroit experiment dirs exist on scratch)
+- [x] Pulled L1 run dir off the PC -> `data/local/` (all 4 stage journals + tree_viz.html)
+- [x] Mined every journal with `scripts/mine_journal.py` -> CSVs committed alongside
+- [x] Saved the Adroit SLURM preflight logs -> `data/adroit/slurm_preflight_logs/*.out`
 - [ ] (nice-to-have) screenshot each `unified_tree_viz.html` -> `data/*/tree.png`
-- [ ] Save the two console logs (Adroit `.out` from SLURM, PC terminal scrollback)
 
-Once `data/adroit/` and `data/local/` contain the real journals + CSVs, every number in
-`report.md` is reproducible from files in the repo instead of from chat memory.
+Every node count / error class / metric quoted in `report.md` is now reproducible from a
+committed file: re-mine any `data/{adroit,local}/**/journal*.json` with
+`python scripts/mine_journal.py <file>` to regenerate the CSV and the printed totals.
+
+### File inventory (committed)
+```
+data/adroit/2026-06-29_13-18-30_.../  R1: stage_1 journal.json + .csv + tree viz  (0/14, 7 URLError)
+data/adroit/2026-06-30_00-51-48_.../  R2: stage_1 journal.json + .csv + tree viz  (0/14, 8 URLError)
+data/adroit/slurm_preflight_logs/     sbx*/oai*/apihosts*/ideation* .out (proxy 502, OpenAI SUCCESS)
+data/local/2026-06-30_04-33-04_.../   L1: stage_1..4 journals + .csv + tree viz  (5 working / 25 buggy)
+data/local/2026-06-30_04-27-45_.../   partial local run: stage_1 journal only
+```

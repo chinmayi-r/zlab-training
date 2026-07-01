@@ -385,7 +385,13 @@ slice. `--skip_writeup --skip_review`, `generate_report=false`.
 |---|---|---|---|---|---|---|---|---|---|---|
 | R1 | topic_concrete | gpt-4o-mini | 1 | 14 | 3 | 0.5 | 14 | **0 / 14** | no | 7 URLError, 3 ModuleNotFound, 2 SystemExit, 1 NameError, 1 FileNotFound |
 | R2 | topic_concrete | **gpt-4o** | 1 | 14 | 3 | 0.5 | 14 | **0 / 14** | no | 8 URLError, 4 RuntimeError, 1 FileNotFound, 1 ModuleNotFound |
-| R3 | topic_concrete (offline note in **Abstract**) | gpt-4o | 1 | 14 | 3 | 0.5 | _pending_ | | | tests whether surfacing the constraint unblocks it |
+| R3 | (planned) topic_concrete, offline note in Abstract | gpt-4o | — | — | — | — | **not run** | — | — | designed but never executed on Adroit; the offline-constraint idea was instead validated by the local run (Part F′) |
+
+> **Data provenance.** R1 and R2 above are backed by committed files:
+> `data/adroit/2026-06-29_13-18-30_.../` and `data/adroit/2026-06-30_00-51-48_.../`
+> (each has the raw `journal.json`, the mined `.csv`, and `unified_tree_viz.html`). Proxy
+> reachability is in `data/adroit/slurm_preflight_logs/` (Sandbox = `502 Proxy Error`;
+> `gpt-4o`/`gpt-4o-mini` = `SUCCESS`). Re-mine any journal with `scripts/mine_journal.py`.
 
 ### Per failure node (representative)
 
@@ -468,8 +474,10 @@ robustness gap when an idea is infeasible in the given environment.
 generic *execution* scaffold for setup (here: a correct offline data-loader, or simply
 surfacing the environment constraint in the prompt the agent actually reads — note the
 launcher's `task_desc` passes only Title+Abstract+Short Hypothesis, **not** the
-`Experiments` field, so constraints placed there are invisible to the coder). R3 tests
-the cheapest version of this (constraint moved into the Abstract). The broader bet — the
+`Experiments` field, so constraints placed there are invisible to the coder). The
+local run (Part F′) is the executed test of the cheapest version of this — the offline/
+GPU/dataloader constraints were moved into the Abstract, and the agent then reached
+working nodes (the planned Adroit R3 variant was never run). The broader bet — the
 "research idea from this" Taiming hinted at — is **environment-aware agents/feedback**:
 a reviewer that recognizes a `403/URLError/Tunnel` signature as "network is blocked, stop
 retrying downloads, use the local cache" would convert a whole class of dead debug loops
