@@ -1,0 +1,7 @@
+id,parent,step,stage,is_buggy,outcome,n_children,debug_depth,exc_type,first_tb_line,metric,plan
+d60bdca3d07d4a4b8dfdbd1540251bdf,,0,draft,True,abandoned(leaf),0,0,,,{'value': {'metric_names': [{'metric_nam…,"To implement this solution, we will first load the CIFAR-10 dataset using PyTorch's `torch…"
+f81a0df3a9fe471ab6fc88d03787f3ba,,1,draft,True,abandoned(leaf),0,0,,,{'value': {'metric_names': [{'metric_nam…,"To fix the bug, we need to ensure that all models and data are correctly moved to the GPU …"
+0556efc1f6e74895a02e8d1e80bb155e,,2,draft,True,abandoned(leaf),0,0,,,{'value': {'metric_names': [{'metric_nam…,"To fix the issue in the previous implementation and ensure functional correctness, we need…"
+f2257ee495d44d6a9f464598ec98bfa0,,3,draft,True,abandoned(leaf),0,0,,,{'value': {'metric_names': [{'metric_nam…,The issue in the previous code is in how the models are being constructed and used with re…
+2af67383418246f995c7e0b0e9613ad1,,4,draft,False,working,0,0,,,{'value': {'metric_names': [{'metric_nam…,"To implement this experiment, we will first load the CIFAR-10 dataset and create a subset …"
+af8f1867007b4834be41cff39db02ea0,,5,draft,True,abandoned(leaf),0,0,,,{'value': {'metric_names': [{'metric_nam…,Seed node

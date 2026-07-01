@@ -1,0 +1,10 @@
+id,parent,step,stage,is_buggy,outcome,n_children,debug_depth,exc_type,first_tb_line,metric,plan
+2af67383418246f995c7e0b0e9613ad1,,0,draft,False,working,0,0,,,{'value': {'metric_names': [{'metric_nam…,"To implement this experiment, we will first load the CIFAR-10 dataset and create a subset …"
+552907e6431440319cdf9769b4a42b22,,1,draft,True,abandoned(leaf),0,0,,,{'value': {'metric_names': [{'metric_nam…,Hyperparam tuning name: Learning Rate. To implement hyperparameter tuning for the learning…
+3852733109ac4558b6a5abb4aa42e3cb,,2,draft,False,working,0,0,,,{'value': {'metric_names': [{'metric_nam…,"Hyperparam tuning name: Batch Size. To implement hyperparameter tuning for batch size, we'…"
+7ece60e13b694d148cdd3a1b72540fca,,3,draft,True,abandoned(leaf),0,0,HfUriError,/home/chunix/AI-Scientist-v2/ai_scientist/treesearch/interpreter.py,"{'value': None, 'maximize': None, 'name'…","To fix the bugs and meet the current requirements, we need to make a few key updates. Firs…"
+ee769315d5154fa78eaa1c982b6fee3e,,4,draft,True,abandoned(leaf),0,0,DatasetNotFoundError,/home/chunix/AI-Scientist-v2/ai_scientist/treesearch/interpreter.py,"{'value': None, 'maximize': None, 'name'…",The issue in the previous implementation stems from incorrect usage of the Hugging Face `l…
+85b7c58fe73c4caf82e13d151c571276,,5,draft,True,abandoned(leaf),0,0,,,{'value': {'metric_names': [{'metric_nam…,"Hyperparam tuning name: Momentum. To implement hyperparameter tuning for momentum, I'll in…"
+d5bbf1f147f547e6913a82e2b589dab8,,6,draft,True,abandoned(leaf),0,0,HfUriError,/home/chunix/AI-Scientist-v2/ai_scientist/treesearch/interpreter.py,"{'value': None, 'maximize': None, 'name'…","To address the bug related to loading Hugging Face datasets, we should ensure that the nam…"
+216c2711556847bd9231cc4bced99d18,,7,draft,True,abandoned(leaf),0,0,,,{'value': {'metric_names': [{'metric_nam…,Hyperparam tuning name: Dropout Rate. To implement hyperparameter tuning for the dropout r…
+e52ed40315b94581812d4d63750b2c97,,8,draft,True,abandoned(leaf),0,0,,,{'value': {'metric_names': [{'metric_nam…,Seed node
