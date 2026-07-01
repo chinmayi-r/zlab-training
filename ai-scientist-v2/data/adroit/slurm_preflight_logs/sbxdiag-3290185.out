@@ -1,0 +1,26 @@
+=== host: adroit-h11n2 ===
+
+=== [1] DNS resolution (direct) ===
+DNS FAIL: gaierror(-2, 'Name or service not known')
+
+=== [2] AzureOpenAI DIRECT (proxy NOT loaded yet) ===
+HTTPS_PROXY=<unset>
+FAIL: APIConnectionError Connection error.
+
+=== loading proxy/default ===
+Http proxy settings allow access to a very limited and pre-approved list of internet API servers.
+This is documented on Research Computing website. General internet access is not supported.
+HTTPS_PROXY=<unset>  https_proxy=http://adroit-proxy:8080
+
+=== [3] AzureOpenAI VIA PROXY ===
+FAIL: APIConnectionError Connection error.
+
+=== [4] raw curl POST via proxy (real endpoint, shows HTTP code) ===
+curl: (56) Received HTTP code 502 from proxy after CONNECT
+
+HTTP 000
+
+=== [5] curl DIRECT via --noproxy (bypass proxy) ===
+curl: (6) Could not resolve host: api-ai-sandbox.princeton.edu
+
+HTTP 000

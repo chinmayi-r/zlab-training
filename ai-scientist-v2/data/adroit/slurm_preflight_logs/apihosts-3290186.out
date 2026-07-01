@@ -1,0 +1,11 @@
+Http proxy settings allow access to a very limited and pre-approved list of internet API servers.
+This is documented on Research Computing website. General internet access is not supported.
+host: adroit-h11n2   https_proxy=http://adroit-proxy:8080
+
+=== reachable through proxy? (401/404/405 = reachable; 000/502 = blocked) ===
+  Princeton Sandbox                  -> HTTP 000ERR
+  OpenAI                             -> HTTP 401
+  Gemini (Google)                    -> HTTP 403
+  Anthropic                          -> HTTP 401
+  HuggingFace                        -> HTTP 000ERR
+  Semantic Scholar                   -> HTTP 000ERR

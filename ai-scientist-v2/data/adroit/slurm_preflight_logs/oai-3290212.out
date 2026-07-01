@@ -1,0 +1,5 @@
+Http proxy settings allow access to a very limited and pre-approved list of internet API servers.
+This is documented on Research Computing website. General internet access is not supported.
+host: adroit-h11n2   https_proxy=http://adroit-proxy:8080   base_url=<default>
+gpt-4o-mini: SUCCESS -> ok
+gpt-4o: SUCCESS -> Ok

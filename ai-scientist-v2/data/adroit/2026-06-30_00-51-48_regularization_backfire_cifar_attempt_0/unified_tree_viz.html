@@ -1,0 +1,993 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      // Check if we're running under Live Server
+      if (window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost') {
+          let lastModified = '';
+
+          // Check for file changes every second
+          setInterval(async () => {
+              try {
+                  const response = await fetch(window.location.href, { method: 'HEAD' });
+                  // get a timestamp that shows when the file was last changed
+                  const currentModified = response.headers.get('last-modified');
+
+                  if (lastModified && lastModified !== currentModified) {
+                      window.location.reload();
+                  }
+
+                  lastModified = currentModified;
+              } catch (e) {
+                  console.error('Error checking for updates:', e);
+              }
+          }, 1000);
+      }
+  </script>
+    <script
+      id="p5scripttag"
+      src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"
+      integrity="sha512-uaz5GpnQoE6t5echKlX8P52czvsIGgLPcvlzfvRubLZ1Hp8JemUDnbUiAahbVtPb+jUVrNETuXvAhDDF/N3M4w=="
+      crossorigin="anonymous"
+      referrerpolicy="no-referrer"
+    ></script>
+
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css"
+    />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/python.min.js"></script>
+
+    <script>
+      const bgCol = "#FFFFFF";
+const accentCol = "#1a439e";
+
+hljs.initHighlightingOnLoad();
+
+// Function to update background color globally
+function updateBackgroundColor(color) {
+  // Update the JS variable
+  window.bgColCurrent = color;
+
+  // Update body background
+  document.body.style.backgroundColor = color;
+
+  // Update canvas container background
+  const canvasContainer = document.getElementById('canvas-container');
+  if (canvasContainer) {
+    canvasContainer.style.backgroundColor = color;
+  }
+}
+
+// Store tree data for each stage
+const stageData = {
+  Stage_1: null,
+  Stage_2: null,
+  Stage_3: null,
+  Stage_4: null
+};
+
+// Keep track of current selected stage
+let currentStage = null;
+let currentSketch = null;
+let availableStages = [];
+
+// Class definitions for nodes and edges
+class Node {
+  constructor(x, y, id, isRoot = false) {
+    this.x = x;
+    this.y = y;
+    this.id = id;
+    this.visible = isRoot; // Only root nodes are visible initially
+    this.appearProgress = 0;
+    this.popEffect = 0;
+    this.selected = false;
+    this.isRootNode = isRoot;
+  }
+
+  update() {
+    if (this.visible) {
+      // Handle the main appearance animation
+      if (this.appearProgress < 1) {
+        this.appearProgress += 0.06;
+
+        // When we reach full size, trigger the pop effect
+        if (this.appearProgress >= 1) {
+          this.appearProgress = 1; // Cap at 1
+          this.popEffect = 1; // Start the pop effect
+        }
+      }
+
+      // Handle the pop effect animation
+      if (this.popEffect > 0) {
+        this.popEffect -= 0.15; // Control how quickly it shrinks back
+        if (this.popEffect < 0) this.popEffect = 0; // Don't go negative
+      }
+    }
+  }
+
+  startAnimation() {
+    this.visible = true;
+  }
+
+  color() {
+    if (this.selected) {
+      return accentCol; // Use the global accent color variable for selected node
+    }
+    return '#4263eb'; // Default blue color
+  }
+
+  render(p5) {
+    if (this.visible) {
+      const popBonus = this.popEffect * 0.1;
+      const nodeScale = p5.map(this.appearProgress, 0, 1, 0, 1) + popBonus;
+      const alpha = p5.map(this.appearProgress, 0, 1, 0, 255);
+
+      p5.push();
+      p5.translate(this.x, this.y);
+
+      // Shadow effect
+      p5.noStroke();
+      p5.rectMode(p5.CENTER);
+
+      for (let i = 1; i <= 4; i++) {
+        p5.fill(0, 0, 0, alpha * 0.06);
+        p5.rect(i, i, 30 * nodeScale, 30 * nodeScale, 10);
+      }
+
+      // Main square - use node's color with alpha
+      let nodeColor = p5.color(this.color());
+      nodeColor.setAlpha(alpha);
+      p5.fill(nodeColor);
+      p5.rect(0, 0, 30 * nodeScale, 30 * nodeScale, 10);
+
+      // Draw checkmark icon if the node is selected
+      if (this.selected && this.appearProgress >= 1) {
+        p5.stroke(255);
+        p5.strokeWeight(2 * nodeScale);
+        p5.noFill();
+        // Draw checkmark
+        p5.beginShape();
+        p5.vertex(-8, 0);
+        p5.vertex(-3, 5);
+        p5.vertex(8, -6);
+        p5.endShape();
+      }
+
+      p5.pop();
+    }
+  }
+
+  isMouseOver(p5) {
+    return this.visible &&
+           p5.mouseX > this.x - 15 &&
+           p5.mouseX < this.x + 15 &&
+           p5.mouseY > this.y - 15 &&
+           p5.mouseY < this.y + 15;
+  }
+
+  // Connect this node to a child node
+  child(childNode) {
+    // Create an edge from this node to the child
+    let isLeft = childNode.x < this.x;
+    let isRight = childNode.x > this.x;
+    let edge = new Edge(this, childNode, isLeft, isRight);
+    return edge;
+  }
+}
+
+class Edge {
+  constructor(parent, child, isLeft, isRight) {
+    this.parent = parent;
+    this.child = child;
+    this.isLeft = isLeft;
+    this.isRight = isRight;
+    this.progress = 0;
+
+    // Calculate the midpoint where branching occurs
+    this.midY = parent.y + (child.y - parent.y) * 0.6;
+
+    // Use the actual child x-coordinate
+    // This ensures the edge will connect directly to the child node
+    this.branchX = child.x;
+  }
+
+  update() {
+    if (this.parent.visible && this.progress < 1) {
+      this.progress += 0.01; // Adjust animation speed
+    }
+    if (this.progress >= 1) {
+      this.child.visible = true;
+    }
+  }
+
+  color() {
+    return this.child.color();
+  }
+
+  render(p5) {
+    if (!this.parent.visible) return;
+
+    // Calculate path lengths
+    const verticalDist1 = this.midY - this.parent.y;
+    const horizontalDist = Math.abs(this.branchX - this.parent.x);
+    const verticalDist2 = this.child.y - this.midY;
+    const totalLength = verticalDist1 + horizontalDist + verticalDist2;
+
+    // Calculate how much of each segment to draw
+    const currentLength = totalLength * this.progress;
+
+    p5.stroke(180, 190, 205);
+    p5.strokeWeight(1.5);
+    p5.noFill();
+
+    // Always draw the first vertical segment from parent
+    if (currentLength > 0) {
+      const firstSegmentLength = Math.min(currentLength, verticalDist1);
+      const currentMidY = p5.lerp(this.parent.y, this.midY, firstSegmentLength / verticalDist1);
+      p5.line(this.parent.x, this.parent.y, this.parent.x, currentMidY);
+    }
+
+    if (currentLength > verticalDist1) {
+      // Draw second segment (horizontal)
+      const secondSegmentLength = Math.min(currentLength - verticalDist1, horizontalDist);
+      const currentBranchX = p5.lerp(this.parent.x, this.branchX, secondSegmentLength / horizontalDist);
+      p5.line(this.parent.x, this.midY, currentBranchX, this.midY);
+
+      if (currentLength > verticalDist1 + horizontalDist) {
+        // Draw third segment (vertical to child)
+        const thirdSegmentLength = currentLength - verticalDist1 - horizontalDist;
+        const currentChildY = p5.lerp(this.midY, this.child.y, thirdSegmentLength / verticalDist2);
+        p5.line(this.branchX, this.midY, this.branchX, currentChildY);
+      }
+    }
+  }
+}
+
+// Create a modified sketch for each stage
+function createTreeSketch(stageId) {
+  return function(p5) {
+    let nodes = [];
+    let edges = [];
+    let treeData = stageData[stageId];
+
+    p5.setup = function() {
+      const canvas = p5.createCanvas(p5.windowWidth * 0.4, p5.windowHeight);
+      canvas.parent('canvas-container');
+      p5.smooth();
+      p5.frameRate(60);
+
+      if (treeData) {
+        createTreeFromData(treeData);
+      }
+    };
+
+    p5.windowResized = function() {
+      p5.resizeCanvas(p5.windowWidth * 0.4, p5.windowHeight);
+    };
+
+    function createTreeFromData(data) {
+      // Clear existing nodes and edges
+      nodes = [];
+      edges = [];
+
+      // Add defensive checks to prevent errors
+      if (!data || !data.layout || !Array.isArray(data.layout) || !data.edges || !Array.isArray(data.edges)) {
+        console.error("Invalid tree data format:", data);
+        return; // Exit if data structure is invalid
+      }
+
+      // Find all parent nodes in edges
+      const parentNodes = new Set();
+      for (const [parentId, childId] of data.edges) {
+        parentNodes.add(parentId);
+      }
+
+      // Create nodes
+      for (let i = 0; i < data.layout.length; i++) {
+        const [nx, ny] = data.layout[i];
+        // A node is a root if it's a parent and not a child in any edge
+        const isRoot = parentNodes.has(i) && data.edges.every(edge => edge[1] !== i);
+
+        const node = new Node(
+          nx * p5.width * 0.8 + p5.width * 0.1,
+          ny * p5.height * 0.8 + p5.height * 0.1,
+          i,
+          isRoot
+        );
+        nodes.push(node);
+      }
+
+      // If no root was found, make the first parent node visible
+      if (!nodes.some(node => node.visible) && parentNodes.size > 0) {
+        // Get the first parent node
+        const firstParentId = [...parentNodes][0];
+        if (nodes[firstParentId]) {
+          nodes[firstParentId].visible = true;
+        }
+      }
+
+      // Create edges
+      for (const [parentId, childId] of data.edges) {
+        const parent = nodes[parentId];
+        const child = nodes[childId];
+        if (parent && child) { // Verify both nodes exist
+          const isLeft = child.x < parent.x;
+          const isRight = child.x > parent.x;
+          edges.push(new Edge(parent, child, isLeft, isRight));
+        }
+      }
+
+      // Select the first node by default
+      if (nodes.length > 0) {
+        nodes[0].selected = true;
+        updateNodeInfo(0);
+      }
+    }
+
+    p5.draw = function() {
+      // Use the global background color if available, otherwise use the default bgCol
+      const currentBgColor = window.bgColCurrent || bgCol;
+      p5.background(currentBgColor);
+
+      // Update and render edges
+      for (const edge of edges) {
+        edge.update();
+        edge.render(p5);
+      }
+
+      // Update and render nodes
+      for (const node of nodes) {
+        node.update();
+        node.render(p5);
+      }
+
+      // Handle mouse hover
+      p5.cursor(p5.ARROW);
+      for (const node of nodes) {
+        if (node.isMouseOver(p5)) {
+          p5.cursor(p5.HAND);
+        }
+      }
+    };
+
+    p5.mousePressed = function() {
+      // Check if any node was clicked
+      for (let i = 0; i < nodes.length; i++) {
+        if (nodes[i].visible && nodes[i].isMouseOver(p5)) {
+          // Deselect all nodes
+          nodes.forEach(n => n.selected = false);
+          // Select the clicked node
+          nodes[i].selected = true;
+          // Update the right panel with node info
+          updateNodeInfo(i);
+          break;
+        }
+      }
+    };
+
+    function updateNodeInfo(nodeIndex) {
+      if (treeData) {
+        setNodeInfo(
+          treeData.code[nodeIndex],
+          treeData.plan[nodeIndex],
+          treeData.plot_code?.[nodeIndex],
+          treeData.plot_plan?.[nodeIndex],
+          treeData.metrics?.[nodeIndex],
+          treeData.exc_type?.[nodeIndex] || '',
+          treeData.exc_info?.[nodeIndex]?.args?.[0] || '',
+          treeData.exc_stack?.[nodeIndex] || [],
+          treeData.plots?.[nodeIndex] || [],
+          treeData.plot_analyses?.[nodeIndex] || [],
+          treeData.vlm_feedback_summary?.[nodeIndex] || '',
+          treeData.datasets_successfully_tested?.[nodeIndex] || [],
+          treeData.exec_time_feedback?.[nodeIndex] || '',
+          treeData.exec_time?.[nodeIndex] || ''
+        );
+      }
+    }
+  };
+}
+
+// Start a new p5 sketch for the given stage
+function startSketch(stageId) {
+  if (currentSketch) {
+    currentSketch.remove();
+  }
+
+  if (stageData[stageId]) {
+    currentSketch = new p5(createTreeSketch(stageId));
+
+    // Update stage info
+    const stageNumber = stageId.split('_')[1];
+    let stageDesc = '';
+    switch(stageId) {
+      case 'Stage_1': stageDesc = 'Preliminary Investigation'; break;
+      case 'Stage_2': stageDesc = 'Baseline Tuning'; break;
+      case 'Stage_3': stageDesc = 'Research Agenda Execution'; break;
+      case 'Stage_4': stageDesc = 'Ablation Studies'; break;
+    }
+
+    document.getElementById('stage-info').innerHTML =
+      `<strong>Current Stage: ${stageNumber} - ${stageDesc}</strong>`;
+  }
+}
+
+// Handle tab selection
+function selectStage(stageId) {
+  if (!stageData[stageId] || !availableStages.includes(stageId)) {
+    return; // Don't allow selection of unavailable stages
+  }
+
+  // Update active tab styles
+  document.querySelectorAll('.tab').forEach(tab => {
+    tab.classList.remove('active');
+  });
+  document.querySelector(`.tab[data-stage="${stageId}"]`).classList.add('active');
+
+  // Start the new sketch
+  currentStage = stageId;
+  startSketch(stageId);
+}
+
+// Function to load the tree data for all stages
+async function loadAllStageData(baseTreeData) {
+  console.log("Loading stage data with base data:", baseTreeData);
+
+  // The base tree data is for the current stage
+  const currentStageId = baseTreeData.current_stage || 'Stage_1';
+
+  // Ensure base tree data is valid and has required properties
+  if (baseTreeData && baseTreeData.layout && baseTreeData.edges) {
+    stageData[currentStageId] = baseTreeData;
+    availableStages.push(currentStageId);
+    console.log(`Added current stage ${currentStageId} to available stages`);
+  } else {
+    console.warn(`Current stage ${currentStageId} data is invalid:`, baseTreeData);
+  }
+
+  // Use relative path to load other stage trees
+  const logDirPath = baseTreeData.log_dir_path || '.';
+  console.log("Log directory path:", logDirPath);
+
+  // Load data for each stage if available
+  const stageNames = ['Stage_1', 'Stage_2', 'Stage_3', 'Stage_4'];
+  const stageNames2actualNames = {
+    'Stage_1': 'stage_1_initial_implementation_1_preliminary',
+    'Stage_2': 'stage_2_baseline_tuning_1_first_attempt',
+    'Stage_3': 'stage_3_creative_research_1_first_attempt',
+    'Stage_4': 'stage_4_ablation_studies_1_first_attempt'
+    }
+
+  for (const stage of stageNames) {
+
+    if (baseTreeData.completed_stages && baseTreeData.completed_stages.includes(stage)) {
+      try {
+        console.log(`Attempting to load data for ${stage} from ${logDirPath}/${stageNames2actualNames[stage]}/tree_data.json`);
+        const response = await fetch(`${logDirPath}/${stageNames2actualNames[stage]}/tree_data.json`);
+
+        if (response.ok) {
+          const data = await response.json();
+
+          // Validate the loaded data
+          if (data && data.layout && data.edges) {
+            stageData[stage] = data;
+            availableStages.push(stage);
+            console.log(`Successfully loaded and validated data for ${stage}`);
+          } else {
+            console.warn(`Loaded data for ${stage} is invalid:`, data);
+          }
+        } else {
+          console.warn(`Failed to load data for ${stage} - HTTP status ${response.status}`);
+        }
+      } catch (error) {
+        console.error(`Error loading data for ${stage}:`, error);
+      }
+    } else {
+      console.log(`Skipping stage ${stage} - not in completed stages list:`, baseTreeData.completed_stages);
+    }
+  }
+
+  // Update tab visibility based on available stages
+  updateTabVisibility();
+
+  // Start with the first available stage
+  if (availableStages.length > 0) {
+    selectStage(availableStages[0]);
+  } else {
+    console.warn("No stages available to display");
+    // Display a message in the canvas area
+    document.getElementById('canvas-container').innerHTML =
+      '<div style="padding: 20px; color: #333; text-align: center;"><h3>No valid tree data available to display</h3></div>';
+  }
+}
+
+// Update tab visibility based on available stages
+function updateTabVisibility() {
+  const tabs = document.querySelectorAll('.tab');
+  tabs.forEach(tab => {
+    const stageId = tab.getAttribute('data-stage');
+    if (availableStages.includes(stageId)) {
+      tab.classList.remove('disabled');
+    } else {
+      tab.classList.add('disabled');
+    }
+  });
+}
+
+// Utility function to set the node info in the right panel
+const setNodeInfo = (code, plan, plot_code, plot_plan, metrics = null, exc_type = '', exc_info = '',
+    exc_stack = [], plots = [], plot_analyses = [], vlm_feedback_summary = '',
+    datasets_successfully_tested = [], exec_time_feedback = '', exec_time = '') => {
+  const codeElm = document.getElementById("code");
+  if (codeElm) {
+    if (code) {
+      codeElm.innerHTML = hljs.highlight(code, { language: "python" }).value;
+    } else {
+      codeElm.innerHTML = '<p>No code available</p>';
+    }
+  }
+
+  const planElm = document.getElementById("plan");
+  if (planElm) {
+    if (plan) {
+      planElm.innerHTML = hljs.highlight(plan, { language: "plaintext" }).value;
+    } else {
+      planElm.innerHTML = '<p>No plan available</p>';
+    }
+  }
+
+  const plot_codeElm = document.getElementById("plot_code");
+  if (plot_codeElm) {
+    if (plot_code) {
+      plot_codeElm.innerHTML = hljs.highlight(plot_code, { language: "python" }).value;
+    } else {
+      plot_codeElm.innerHTML = '<p>No plot code available</p>';
+    }
+  }
+
+  const plot_planElm = document.getElementById("plot_plan");
+  if (plot_planElm) {
+    if (plot_plan) {
+      plot_planElm.innerHTML = hljs.highlight(plot_plan, { language: "plaintext" }).value;
+    } else {
+      plot_planElm.innerHTML = '<p>No plot plan available</p>';
+    }
+  }
+
+  const metricsElm = document.getElementById("metrics");
+  if (metricsElm) {
+      let metricsContent = `<h3>Metrics:</h3>`;
+      if (metrics && metrics.metric_names) {
+          for (const metric of metrics.metric_names) {
+              metricsContent += `<div class="metric-group">`;
+              metricsContent += `<h4>${metric.metric_name}</h4>`;
+              metricsContent += `<p><strong>Description:</strong> ${metric.description || 'N/A'}</p>`;
+              metricsContent += `<p><strong>Optimization:</strong> ${metric.lower_is_better ? 'Minimize' : 'Maximize'}</p>`;
+
+              // Create table for dataset values
+              metricsContent += `<table class="metric-table">
+                  <tr>
+                      <th>Dataset</th>
+                      <th>Final Value</th>
+                      <th>Best Value</th>
+                  </tr>`;
+
+              for (const dataPoint of metric.data) {
+                  metricsContent += `<tr>
+                      <td>${dataPoint.dataset_name}</td>
+                      <td>${dataPoint.final_value?.toFixed(4) || 'N/A'}</td>
+                      <td>${dataPoint.best_value?.toFixed(4) || 'N/A'}</td>
+                  </tr>`;
+              }
+
+              metricsContent += `</table></div>`;
+          }
+      } else if (metrics === null) {
+          metricsContent += `<p>No metrics available</p>`;
+      }
+      metricsElm.innerHTML = metricsContent;
+  }
+
+  // Add plots display
+  const plotsElm = document.getElementById("plots");
+  if (plotsElm) {
+      if (plots && plots.length > 0) {
+          let plotsContent = '';
+          plots.forEach(plotPath => {
+              plotsContent += `
+                  <div class="plot-item">
+                      <img src="${plotPath}" alt="Experiment Plot" onerror="console.error('Failed to load plot:', this.src)"/>
+                  </div>`;
+          });
+          plotsElm.innerHTML = plotsContent;
+      } else {
+          plotsElm.innerHTML = '';
+      }
+  }
+
+  // Add error info display
+  const errorElm = document.getElementById("exc_info");
+  if (errorElm) {
+    if (exc_type) {
+      let errorContent = `<h3 style="color: #ff5555">Exception Information:</h3>
+                          <p><strong>Type:</strong> ${exc_type}</p>`;
+
+      if (exc_info) {
+        errorContent += `<p><strong>Details:</strong> <pre>${JSON.stringify(exc_info, null, 2)}</pre></p>`;
+      }
+
+      if (exc_stack) {
+        errorContent += `<p><strong>Stack Trace:</strong> <pre>${exc_stack.join('\n')}</pre></p>`;
+      }
+
+      errorElm.innerHTML = errorContent;
+    } else {
+      errorElm.innerHTML = "No exception info available";
+    }
+  }
+
+  const exec_timeElm = document.getElementById("exec_time");
+  if (exec_timeElm) {
+    let exec_timeContent = '<div id="exec_time"><h3>Execution Time (in seconds):</h3><p>' + exec_time + '</p></div>';
+    exec_timeElm.innerHTML = exec_timeContent;
+  }
+
+  const exec_time_feedbackElm = document.getElementById("exec_time_feedback");
+  if (exec_time_feedbackElm) {
+    let exec_time_feedbackContent = '<div id="exec_time_feedback_content">'
+    exec_time_feedbackContent += '<h3>Execution Time Feedback:</h3>'
+    exec_time_feedbackContent += '<p>' + exec_time_feedback + '</p>'
+    exec_time_feedbackContent += '</div>';
+    exec_time_feedbackElm.innerHTML = exec_time_feedbackContent;
+  }
+
+  const vlm_feedbackElm = document.getElementById("vlm_feedback");
+  if (vlm_feedbackElm) {
+      let vlm_feedbackContent = '';
+
+      if (plot_analyses && plot_analyses.length > 0) {
+          vlm_feedbackContent += `<h3>Plot Analysis:</h3>`;
+          plot_analyses.forEach(analysis => {
+              if (analysis && analysis.plot_path) {  // Add null check
+                  vlm_feedbackContent += `
+                      <div class="plot-analysis">
+                          <h4>Analysis for ${analysis.plot_path.split('/').pop()}</h4>
+                          <p>${analysis.analysis || 'No analysis available'}</p>
+                          <ul class="key-findings">
+                              ${(analysis.key_findings || []).map(finding => `<li>${finding}</li>`).join('')}
+                          </ul>
+                      </div>`;
+              } else {
+                  console.warn('Received invalid plot analysis:', analysis);
+                  vlm_feedbackContent += `
+                      <div class="plot-analysis">
+                          <p>Invalid plot analysis data received</p>
+                      </div>`;
+              }
+          });
+      }
+
+      // Add actionable insights if available
+      if (vlm_feedback_summary && typeof vlm_feedback_summary === 'string') {
+          vlm_feedbackContent += `
+              <div class="vlm_feedback">
+                  <h3>VLM Feedback Summary:</h3>
+                  <p>${vlm_feedback_summary}</p>
+              </div>`;
+      }
+
+      console.log("Datasets successfully tested:", datasets_successfully_tested);
+      if (datasets_successfully_tested && datasets_successfully_tested.length > 0) {
+          vlm_feedbackContent += `
+              <div id="datasets_successfully_tested">
+                  <h3>Datasets Successfully Tested:</h3>
+                  <p>${datasets_successfully_tested.join(', ')}</p>
+              </div>`;
+      }
+
+      if (!vlm_feedbackContent) {
+          vlm_feedbackContent = '<p>No insights available for this experiment.</p>';
+      }
+
+      vlm_feedbackElm.innerHTML = vlm_feedbackContent;
+  }
+
+  const datasets_successfully_testedElm = document.getElementById("datasets_successfully_tested");
+  if (datasets_successfully_testedElm) {
+      let datasets_successfully_testedContent = '';
+      if (datasets_successfully_tested && datasets_successfully_tested.length > 0) {
+          datasets_successfully_testedContent = `<h3>Datasets Successfully Tested:</h3><ul>`;
+          datasets_successfully_tested.forEach(dataset => {
+              datasets_successfully_testedContent += `<li>${dataset}</li>`;
+          });
+          datasets_successfully_testedContent += `</ul>`;
+      } else {
+          datasets_successfully_testedContent = '<p>No datasets tested yet</p>';
+      }
+      datasets_successfully_testedElm.innerHTML = datasets_successfully_testedContent;
+  }
+};
+
+// Initialize with the provided tree data
+const treeStructData = {"edges": [[0, 1], [1, 2], [2, 3], [3, 4], [5, 6], [6, 7], [9, 11], [10, 13]], "layout": [[0.0, 0.0], [0.0, 0.25], [0.0, 0.5], [0.0, 0.75], [0.0, 1.0], [0.2, 0.0], [0.2, 0.25], [0.2, 0.5], [0.4, 0.0], [0.6, 0.0], [0.8, 0.0], [0.6, 0.25], [1.0, 0.0], [0.8, 0.25]], "plan": ["We'll implement a simple controlled experiment comparing a no-regularization\nbaseline to various regularization methods on the CIFAR-10 dataset using the\nResNet-18 model. We'll follow a strict protocol for reproducibility and fairness\nacross experiments by fixing the training set size, model architecture,\noptimizer parameters, and random seeds. We'll measure the impact of each\nregularization arm on the model's generalization ability as indicated by the\ntop-1 test accuracy. The experiment will be run across 3 seeds and results will\nbe averaged. We'll handle GPU/CPU allocation, model training, evaluation, and\nresult saving. The different regularization techniques considered are dropout,\nweight decay, label smoothing, and RandAugment. We will create a baseline model\nwithout any regularization and compare it with models where one regularization\ntechnique at a time is applied. Regularization effects will be evaluated using\nthe top-1 test accuracy metric, averaged over the seeds.", "To fix the issue in the previous implementation, we need to address the \"Tunnel\nconnection failed: 403 Forbidden\" error, which occurs when attempting to\ndownload the CIFAR-10 dataset. This error typically happens due to network\nconstraints or restrictions that block direct access to the dataset server. The\nsolution involves downloading the CIFAR-10 dataset manually, placing it in the\nexpected directory, and then using torchvision's Cifar10 loader without the\ndownload step enabled. Another potential fix would be to consider using a proxy\nserver, but for simplicity, we will focus on the manual download approach. The\nrest of the code will remain the same, ensuring that models and data are\nappropriately handled with GPU support.", "To resolve the dataset not found error, we'll set the `download` parameter to\n`True` in both `torchvision.datasets.CIFAR10` instances. This change will ensure\nthat the dataset is automatically downloaded if it is not already present in the\nspecified directory. We'll include the `device` initialization and ensure that\nthe model to be trained is transferred to the appropriate device. We will keep\nthe implementation as self-contained and executable immediately when run.", "The error indicates a failure to download the CIFAR-10 dataset due to a tunnel\nconnection issue. To resolve this, we can use a proxy or download the dataset\nmanually if you are in a network-restricted environment. However, to ensure the\nscript runs seamlessly in this environment without external dependencies, I will\nmodify the code to check if the dataset is already downloaded. If not, it will\nuse a local path to access a previously downloaded dataset if available or raise\nan informative exception about downloading it manually.", "The previous implementation raised a `FileNotFoundError` because it expected the\nCIFAR-10 dataset to be present locally without a mechanism to download it. The\nsolution is to add dataset downloading functionality if the dataset is not\nalready present. This can be done using the `download=True` parameter in the\ndataset instantiation. Additionally, a consistent naming strategy for the\ndataset's path directory and unnecessary redundancies are removed.", "To investigate how standard regularization methods might backfire on model\nperformance, we will perform a controlled experiment using a subset of the\nCIFAR-10 dataset and a ResNet-18 architecture. We begin by importing necessary\nmodules and preparing the dataset by selecting 500 images per class from\nCIFAR-10 for training. If the dataset cannot be fetched, local proxy issues\nshould be considered. The model will be trained using stochastic gradient\ndescent with a cosine-decayed learning rate, a batch size of 128, over 30\nepochs. We'll conduct multiple trials across three random seeds to assess\nvariations in the regularization's impact. We will evaluate model performance\nusing Average Top-1 Test Accuracy and save the results for analysis. Each of the\nconfiguration conditions, including a no-regularization baseline and single\nregularization techniques (dropout, weight decay, label smoothing, and\nRandAugment), will be systematically applied and compared. All generated data\nwill be stored in a directory for further examination.", "To fix the issue in the previous implementation, we need to address the error\nrelated to the failure in downloading the CIFAR-10 dataset. The error indicates\na network issue, likely due to a restriction on internet access from the\nenvironment where the code is running. A common workaround for this is to ensure\nthe dataset is already available locally and is correctly referenced for\nloading. We'll modify the code to check if the dataset is present locally, and\nif not, handle it gracefully. Additionally, ensure that the model is\nappropriately configured with dropout, weight decay, label smoothing, and\nRandAugment settings only under corresponding configurations.", "To fix the issue reported in the previous implementation, we need to set the\n`download` parameter to `True` when initializing the CIFAR-10 dataset using\n`torchvision.datasets.CIFAR10`. This will allow the dataset to be downloaded if\nit is not found locally. We also ensure that all components related to GPU\ncomputation, such as the model, input tensors, and model-related tensors are\nproperly moved to the GPU using `.to(device)` where applicable. The bug fix\ncenters around dataset availability and ensuring smooth on-device computations.", "To begin, we'll set up the experiment environment, specifically handling GPU and\ndirectory preparation. We'll then implement a simple ResNet-18 model using\nPyTorch with CIFAR-10 dataset, focusing only on the no-regularization baseline\napproach for initial testing. The CIFAR-10 data will be preprocessed to a fixed\nsubset of 5,000 training images using a specific seed to ensure reproducibility.\nWe'll train the ResNet-18 model from scratch, using stochastic gradient descent\n(SGD) with cosine-decayed learning rate over 30 epochs. We'll focus on correctly\nmoving data and models to available devices to ensure efficient computation. The\nevaluation metric, average Top-1 Test Accuracy, will be computed over three\ndifferent seeds to ensure that the results are robust. Throughout the training,\nwe'll track the training and validation losses and at the end, save all relevant\nexperimental data, including metrics, in numpy format for future reference and\nvisualization.", "To implement the outlined research idea, we will train a ResNet-18 on a fixed\nsubset of CIFAR-10, specifically using 5,000 images for training (500 per class)\nand the full 10,000-image set for testing. We'll first create a baseline model\nwithout any regularization to establish a performance benchmark. For this\nimplementation, we'll use SGD with a learning rate of 0.1, cosine decay, batch\nsize of 128, and train for 30 epochs. We'll conduct the experiment across three\ndifferent random seeds (0, 1, and 2) and compute the Average Top-1 Test Accuracy\nto measure performance. In this initial step, we'll focus solely on the baseline\nmodel, saving the results and metrics for further comparison. After training,\nwe'll save the metrics and evaluation results to the 'working' directory.", "We will implement a baseline experiment for our research idea using a ResNet-18\narchitecture trained from scratch on a subset of CIFAR-10. We'll run experiments\nwith three different seeds (0, 1, 2) to assess the impact of standard\nregularizations such as dropout, weight decay, label smoothing, and RandAugment\non a fixed dataset of 5,000 training images. The experiment will use a fixed\nsetup for reproducibility: Stochastic Gradient Descent (SGD) optimizer, a\nlearning rate that is cosine-decayed, batch size of 128, over 30 epochs. We'll\nevaluate the effectiveness of each regularization technique by comparing the\nresulting average top-1 test accuracy across the three seeds. We'll focus on the\ncore components of moving data and models to the appropriate device, maintaining\nreproducibility with random seeds, and tracking metrics. Finally, the results,\nincluding average top-1 test accuracies, will be saved for analysis.", "The error occurring in the code is due to a network issue while downloading the\nCIFAR-10 dataset, specifically a \"Tunnel connection failed: 403 Forbidden\". This\ntype of error often happens in restricted network environments where direct\ninternet access is blocked. To fix this, we need to ensure that the CIFAR-10\ndataset is accessible without relying on direct internet access from the script.\nA possible solution is to download the CIFAR-10 dataset manually from an\nexternal computer with internet access, place it in the local \"./data\"\ndirectory, and ensure it is in the correct format expected by the\ntorchvision.datasets.CIFAR10 class. Here's how you can implement it:", "The goal of this experiment is to compare the effects of different\nregularization techniques on the test accuracy of a ResNet-18 model trained on a\nsmall subset of the CIFAR-10 dataset. We'll first define a baseline with no\nregularization and then evaluate strategies such as dropout, weight decay, label\nsmoothing, and RandAugment individually. The dataset will be loaded using\nPyTorch's `torchvision` package, and we will leverage its `transforms`\nfunctionality for basic preprocessing. We'll use stochastic gradient descent\n(SGD) with a learning rate of 0.1, cosine annealing scheduler, and aim for\nconsistent runs with fixed seeds. During training, model inputs and operations\nwill be properly allocated to GPU if available. Top-1 Test Accuracy will be\ntracked across three random seeds and calculated as mean \u00b1 std deviation.\nResults will be saved, and metrics will be logged throughout.", "To fix the issue with downloading CIFAR-10 due to network restrictions, we can\npre-download the CIFAR-10 dataset to the local environment and use it directly\nfor our experiments. Additionally, we must ensure that seeds are set correctly\nfor reproducibility and metrics are tracked properly. Furthermore, all\noperations, including model, data, and optimizer setup, should appropriately\nhandle moving to the available device (CPU or GPU). Below is the corrected code\nthat incorporates these changes."], "code": ["import os\nimport numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.optim as optim\nimport torchvision\nimport torchvision.transforms as transforms\nfrom torchvision.models import resnet18\nfrom torch.utils.data import DataLoader, Subset\n\n# Define the working directory\nworking_dir = os.path.join(os.getcwd(), \"working\")\nos.makedirs(working_dir, exist_ok=True)\n\n# Initialize device\ndevice = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\nprint(f\"Using device: {device}\")\n\n# Define hyperparameters and seeds\nBATCH_SIZE = 128\nLR = 0.1\nNUM_EPOCHS = 30\nSEEDS = [0, 1, 2]\n\n# Define CIFAR-10 dataset transforms\ntransform = transforms.Compose(\n    [transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]\n)\n\n# Download train and test datasets\ntrain_dataset = torchvision.datasets.CIFAR10(\n    root=\"./data\", train=True, download=True, transform=transform\n)\ntest_dataset = torchvision.datasets.CIFAR10(\n    root=\"./data\", train=False, download=True, transform=transform\n)\n\n# Prepare a fixed subset of the training dataset\nsubset_indices = list(range(5000))  # First 5000 samples\ntrain_subset = Subset(train_dataset, subset_indices)\n\n# Initialize DataLoaders\ntrain_loader = DataLoader(train_subset, batch_size=BATCH_SIZE, shuffle=True)\ntest_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False)\n\n# Initialize experiment data container\nexperiment_data = {\n    \"no_regularization\": {\n        \"metrics\": {\"train\": [], \"val\": []},\n        \"losses\": {\"train\": [], \"val\": []},\n        \"predictions\": [],\n        \"ground_truth\": [],\n    },\n    # Add other arms as needed\n}\n\n\n# Training and evaluation function\ndef train_and_evaluate(\n    model, criterion, optimizer, train_loader, test_loader, num_epochs, seed, arm_name\n):\n    torch.manual_seed(seed)\n    np.random.seed(seed)\n\n    for epoch in range(num_epochs):\n        model.train()\n        correct, total, train_loss = 0, 0, 0.0\n        for batch in train_loader:\n            inputs, targets = batch[0].to(device), batch[1].to(device)\n            optimizer.zero_grad()\n            outputs = model(inputs)\n            loss = criterion(outputs, targets)\n            loss.backward()\n            optimizer.step()\n            train_loss += loss.item()\n            _, predicted = outputs.max(1)\n            total += targets.size(0)\n            correct += predicted.eq(targets).sum().item()\n\n        # Evaluate on test set\n        model.eval()\n        correct_val, total_val, val_loss = 0, 0, 0.0\n        with torch.no_grad():\n            for batch in test_loader:\n                inputs, targets = batch[0].to(device), batch[1].to(device)\n                outputs = model(inputs)\n                loss = criterion(outputs, targets)\n                val_loss += loss.item()\n                _, predicted = outputs.max(1)\n                total_val += targets.size(0)\n                correct_val += predicted.eq(targets).sum().item()\n\n        # Calculate metrics\n        train_accuracy = 100.0 * correct / total\n        val_accuracy = 100.0 * correct_val / total_val\n        experiment_data[arm_name][\"metrics\"][\"train\"].append(train_accuracy)\n        experiment_data[arm_name][\"metrics\"][\"val\"].append(val_accuracy)\n        experiment_data[arm_name][\"losses\"][\"train\"].append(\n            train_loss / len(train_loader)\n        )\n        experiment_data[arm_name][\"losses\"][\"val\"].append(val_loss / len(test_loader))\n\n        # Print validation metrics\n        print(\n            f\"Epoch {epoch}: validation_loss = {val_loss / len(test_loader):.4f}, top-1 accuracy = {val_accuracy:.2f}\"\n        )\n\n\n# Baseline model (resnet18 without any modifications)\nfor seed in SEEDS:\n    model = resnet18(num_classes=10).to(device)\n    criterion = nn.CrossEntropyLoss()\n    optimizer = optim.SGD(\n        model.parameters(), lr=LR, momentum=0.9, weight_decay=0\n    )  # no weight decay (baseline)\n    train_and_evaluate(\n        model,\n        criterion,\n        optimizer,\n        train_loader,\n        test_loader,\n        NUM_EPOCHS,\n        seed,\n        \"no_regularization\",\n    )\n\n# Save experiment data\nnp.save(os.path.join(working_dir, \"experiment_data.npy\"), experiment_data)\n", "import os\nimport numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.optim as optim\nimport torchvision\nimport torchvision.transforms as transforms\nfrom torchvision.models import resnet18\nfrom torch.utils.data import DataLoader, Subset\n\n# Define the working directory\nworking_dir = os.path.join(os.getcwd(), \"working\")\nos.makedirs(working_dir, exist_ok=True)\n\n# Initialize device\ndevice = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\nprint(f\"Using device: {device}\")\n\n# Define hyperparameters and seeds\nBATCH_SIZE = 128\nLR = 0.1\nNUM_EPOCHS = 30\nSEEDS = [0, 1, 2]\n\n# Define CIFAR-10 dataset transforms\ntransform = transforms.Compose(\n    [transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]\n)\n\n# Assuming the CIFAR-10 dataset is manually downloaded and extracted to './data'\n# Download train and test datasets\ntrain_dataset = torchvision.datasets.CIFAR10(\n    root=\"./data\", train=True, download=False, transform=transform\n)\ntest_dataset = torchvision.datasets.CIFAR10(\n    root=\"./data\", train=False, download=False, transform=transform\n)\n\n# Prepare a fixed subset of the training dataset\nsubset_indices = list(range(5000))  # First 5000 samples\ntrain_subset = Subset(train_dataset, subset_indices)\n\n# Initialize DataLoaders\ntrain_loader = DataLoader(train_subset, batch_size=BATCH_SIZE, shuffle=True)\ntest_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False)\n\n# Initialize experiment data container\nexperiment_data = {\n    \"no_regularization\": {\n        \"metrics\": {\"train\": [], \"val\": []},\n        \"losses\": {\"train\": [], \"val\": []},\n        \"predictions\": [],\n        \"ground_truth\": [],\n    },\n}\n\n\n# Training and evaluation function\ndef train_and_evaluate(\n    model, criterion, optimizer, train_loader, test_loader, num_epochs, seed, arm_name\n):\n    torch.manual_seed(seed)\n    np.random.seed(seed)\n\n    for epoch in range(num_epochs):\n        model.train()\n        correct, total, train_loss = 0, 0, 0.0\n        for batch in train_loader:\n            inputs, targets = batch[0].to(device), batch[1].to(device)\n            optimizer.zero_grad()\n            outputs = model(inputs)\n            loss = criterion(outputs, targets)\n            loss.backward()\n            optimizer.step()\n            train_loss += loss.item()\n            _, predicted = outputs.max(1)\n            total += targets.size(0)\n            correct += predicted.eq(targets).sum().item()\n\n        # Evaluate on test set\n        model.eval()\n        correct_val, total_val, val_loss = 0, 0, 0.0\n        with torch.no_grad():\n            for batch in test_loader:\n                inputs, targets = batch[0].to(device), batch[1].to(device)\n                outputs = model(inputs)\n                loss = criterion(outputs, targets)\n                val_loss += loss.item()\n                _, predicted = outputs.max(1)\n                total_val += targets.size(0)\n                correct_val += predicted.eq(targets).sum().item()\n\n        # Calculate metrics\n        train_accuracy = 100.0 * correct / total\n        val_accuracy = 100.0 * correct_val / total_val\n        experiment_data[arm_name][\"metrics\"][\"train\"].append(train_accuracy)\n        experiment_data[arm_name][\"metrics\"][\"val\"].append(val_accuracy)\n        experiment_data[arm_name][\"losses\"][\"train\"].append(\n            train_loss / len(train_loader)\n        )\n        experiment_data[arm_name][\"losses\"][\"val\"].append(val_loss / len(test_loader))\n\n        # Print validation metrics\n        print(\n            f\"Epoch {epoch}: validation_loss = {val_loss / len(test_loader):.4f}, top-1 accuracy = {val_accuracy:.2f}\"\n        )\n\n\n# Baseline model (resnet18 without any modifications)\nfor seed in SEEDS:\n    model = resnet18(num_classes=10).to(device)\n    criterion = nn.CrossEntropyLoss()\n    optimizer = optim.SGD(\n        model.parameters(), lr=LR, momentum=0.9, weight_decay=0\n    )  # no weight decay (baseline)\n    train_and_evaluate(\n        model,\n        criterion,\n        optimizer,\n        train_loader,\n        test_loader,\n        NUM_EPOCHS,\n        seed,\n        \"no_regularization\",\n    )\n\n# Save experiment data\nnp.save(os.path.join(working_dir, \"experiment_data.npy\"), experiment_data)\n", "import os\nimport numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.optim as optim\nimport torchvision\nimport torchvision.transforms as transforms\nfrom torchvision.models import resnet18\nfrom torch.utils.data import DataLoader, Subset\n\n# Define the working directory\nworking_dir = os.path.join(os.getcwd(), \"working\")\nos.makedirs(working_dir, exist_ok=True)\n\n# Initialize device\ndevice = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\nprint(f\"Using device: {device}\")\n\n# Define hyperparameters and seeds\nBATCH_SIZE = 128\nLR = 0.1\nNUM_EPOCHS = 30\nSEEDS = [0, 1, 2]\n\n# Define CIFAR-10 dataset transforms\ntransform = transforms.Compose(\n    [transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]\n)\n\n# Download train and test datasets\ntrain_dataset = torchvision.datasets.CIFAR10(\n    root=\"./data\", train=True, download=True, transform=transform\n)\ntest_dataset = torchvision.datasets.CIFAR10(\n    root=\"./data\", train=False, download=True, transform=transform\n)\n\n# Prepare a fixed subset of the training dataset\nsubset_indices = list(range(5000))  # First 5000 samples\ntrain_subset = Subset(train_dataset, subset_indices)\n\n# Initialize DataLoaders\ntrain_loader = DataLoader(train_subset, batch_size=BATCH_SIZE, shuffle=True)\ntest_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False)\n\n# Initialize experiment data container\nexperiment_data = {\n    \"no_regularization\": {\n        \"metrics\": {\"train\": [], \"val\": []},\n        \"losses\": {\"train\": [], \"val\": []},\n        \"predictions\": [],\n        \"ground_truth\": [],\n    },\n}\n\n\n# Training and evaluation function\ndef train_and_evaluate(\n    model, criterion, optimizer, train_loader, test_loader, num_epochs, seed, arm_name\n):\n    torch.manual_seed(seed)\n    np.random.seed(seed)\n\n    for epoch in range(num_epochs):\n        model.train()\n        correct, total, train_loss = 0, 0, 0.0\n        for batch in train_loader:\n            inputs, targets = batch[0].to(device), batch[1].to(device)\n            optimizer.zero_grad()\n            outputs = model(inputs)\n            loss = criterion(outputs, targets)\n            loss.backward()\n            optimizer.step()\n            train_loss += loss.item()\n            _, predicted = outputs.max(1)\n            total += targets.size(0)\n            correct += predicted.eq(targets).sum().item()\n\n        # Evaluate on test set\n        model.eval()\n        correct_val, total_val, val_loss = 0, 0, 0.0\n        with torch.no_grad():\n            for batch in test_loader:\n                inputs, targets = batch[0].to(device), batch[1].to(device)\n                outputs = model(inputs)\n                loss = criterion(outputs, targets)\n                val_loss += loss.item()\n                _, predicted = outputs.max(1)\n                total_val += targets.size(0)\n                correct_val += predicted.eq(targets).sum().item()\n\n        # Calculate metrics\n        train_accuracy = 100.0 * correct / total\n        val_accuracy = 100.0 * correct_val / total_val\n        experiment_data[arm_name][\"metrics\"][\"train\"].append(train_accuracy)\n        experiment_data[arm_name][\"metrics\"][\"val\"].append(val_accuracy)\n        experiment_data[arm_name][\"losses\"][\"train\"].append(\n            train_loss / len(train_loader)\n        )\n        experiment_data[arm_name][\"losses\"][\"val\"].append(val_loss / len(test_loader))\n\n        # Print validation metrics\n        print(\n            f\"Epoch {epoch}: validation_loss = {val_loss / len(test_loader):.4f}, top-1 accuracy = {val_accuracy:.2f}\"\n        )\n\n\n# Baseline model (resnet18 without any modifications)\nfor seed in SEEDS:\n    model = resnet18(num_classes=10).to(device)\n    criterion = nn.CrossEntropyLoss()\n    optimizer = optim.SGD(\n        model.parameters(), lr=LR, momentum=0.9, weight_decay=0\n    )  # no weight decay (baseline)\n    train_and_evaluate(\n        model,\n        criterion,\n        optimizer,\n        train_loader,\n        test_loader,\n        NUM_EPOCHS,\n        seed,\n        \"no_regularization\",\n    )\n\n# Save experiment data\nnp.save(os.path.join(working_dir, \"experiment_data.npy\"), experiment_data)\n", "import os\nimport numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.optim as optim\nimport torchvision\nimport torchvision.transforms as transforms\nfrom torchvision.models import resnet18\nfrom torch.utils.data import DataLoader, Subset\n\n# Define the working directory\nworking_dir = os.path.join(os.getcwd(), \"working\")\nos.makedirs(working_dir, exist_ok=True)\n\n# Initialize device\ndevice = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\nprint(f\"Using device: {device}\")\n\n# Define hyperparameters and seeds\nBATCH_SIZE = 128\nLR = 0.1\nNUM_EPOCHS = 30\nSEEDS = [0, 1, 2]\n\n# Define CIFAR-10 dataset transforms\ntransform = transforms.Compose(\n    [transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]\n)\n\n# Define paths for datasets\ndata_root = \"./data\"\ntrain_data_path = os.path.join(data_root, \"cifar-10-batches-py\")\n\n# Check for the existence of CIFAR datasets\nif not os.path.exists(train_data_path):\n    raise FileNotFoundError(\n        f\"CIFAR-10 dataset is not available in '{data_root}'. Please download it manually from https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz and extract to '{data_root}'.\"\n    )\n\n# Download train and test datasets\ntrain_dataset = torchvision.datasets.CIFAR10(\n    root=data_root, train=True, download=False, transform=transform\n)\ntest_dataset = torchvision.datasets.CIFAR10(\n    root=data_root, train=False, download=False, transform=transform\n)\n\n# Prepare a fixed subset of the training dataset\nsubset_indices = list(range(5000))  # First 5000 samples\ntrain_subset = Subset(train_dataset, subset_indices)\n\n# Initialize DataLoaders\ntrain_loader = DataLoader(train_subset, batch_size=BATCH_SIZE, shuffle=True)\ntest_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False)\n\n# Initialize experiment data container\nexperiment_data = {\n    \"no_regularization\": {\n        \"metrics\": {\"train\": [], \"val\": []},\n        \"losses\": {\"train\": [], \"val\": []},\n        \"predictions\": [],\n        \"ground_truth\": [],\n    },\n}\n\n\n# Training and evaluation function\ndef train_and_evaluate(\n    model, criterion, optimizer, train_loader, test_loader, num_epochs, seed, arm_name\n):\n    torch.manual_seed(seed)\n    np.random.seed(seed)\n    model.to(device)\n\n    for epoch in range(num_epochs):\n        model.train()\n        correct, total, train_loss = 0, 0, 0.0\n        for batch in train_loader:\n            inputs, targets = batch[0].to(device), batch[1].to(device)\n            optimizer.zero_grad()\n            outputs = model(inputs)\n            loss = criterion(outputs, targets)\n            loss.backward()\n            optimizer.step()\n            train_loss += loss.item()\n            _, predicted = outputs.max(1)\n            total += targets.size(0)\n            correct += predicted.eq(targets).sum().item()\n\n        # Evaluate on test set\n        model.eval()\n        correct_val, total_val, val_loss = 0, 0, 0.0\n        with torch.no_grad():\n            for batch in test_loader:\n                inputs, targets = batch[0].to(device), batch[1].to(device)\n                outputs = model(inputs)\n                loss = criterion(outputs, targets)\n                val_loss += loss.item()\n                _, predicted = outputs.max(1)\n                total_val += targets.size(0)\n                correct_val += predicted.eq(targets).sum().item()\n\n        # Calculate metrics\n        train_accuracy = 100.0 * correct / total\n        val_accuracy = 100.0 * correct_val / total_val\n        experiment_data[arm_name][\"metrics\"][\"train\"].append(train_accuracy)\n        experiment_data[arm_name][\"metrics\"][\"val\"].append(val_accuracy)\n        experiment_data[arm_name][\"losses\"][\"train\"].append(\n            train_loss / len(train_loader)\n        )\n        experiment_data[arm_name][\"losses\"][\"val\"].append(val_loss / len(test_loader))\n\n        # Print validation metrics\n        print(\n            f\"Epoch {epoch}: validation_loss = {val_loss / len(test_loader):.4f}, top-1 accuracy = {val_accuracy:.2f}\"\n        )\n\n\n# Baseline model (resnet18 without any modifications)\nfor seed in SEEDS:\n    model = resnet18(num_classes=10).to(device)\n    criterion = nn.CrossEntropyLoss()\n    optimizer = optim.SGD(\n        model.parameters(), lr=LR, momentum=0.9, weight_decay=0\n    )  # no weight decay (baseline)\n    train_and_evaluate(\n        model,\n        criterion,\n        optimizer,\n        train_loader,\n        test_loader,\n        NUM_EPOCHS,\n        seed,\n        \"no_regularization\",\n    )\n\n# Save experiment data\nnp.save(os.path.join(working_dir, \"experiment_data.npy\"), experiment_data)\n", "import os\nimport numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.optim as optim\nimport torchvision\nimport torchvision.transforms as transforms\nfrom torchvision.models import resnet18\nfrom torch.utils.data import DataLoader, Subset\n\n# Create working directory\nworking_dir = os.path.join(os.getcwd(), \"working\")\nos.makedirs(working_dir, exist_ok=True)\n\n# Initialize device\ndevice = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\nprint(f\"Using device: {device}\")\n\n# Define hyperparameters and seeds\nBATCH_SIZE = 128\nLR = 0.1\nNUM_EPOCHS = 30\nSEEDS = [0, 1, 2]\n\n# Define CIFAR-10 dataset transforms\ntransform = transforms.Compose(\n    [transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]\n)\n\n# Define paths for datasets\ndata_root = \"./data\"\n\n# Download train and test datasets\ntrain_dataset = torchvision.datasets.CIFAR10(\n    root=data_root, train=True, download=True, transform=transform\n)\ntest_dataset = torchvision.datasets.CIFAR10(\n    root=data_root, train=False, download=True, transform=transform\n)\n\n# Prepare a fixed subset of the training dataset\nsubset_indices = list(range(5000))  # First 5000 samples\ntrain_subset = Subset(train_dataset, subset_indices)\n\n# Initialize DataLoaders\ntrain_loader = DataLoader(train_subset, batch_size=BATCH_SIZE, shuffle=True)\ntest_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False)\n\n# Initialize experiment data container\nexperiment_data = {\n    \"no_regularization\": {\n        \"metrics\": {\"train\": [], \"val\": []},\n        \"losses\": {\"train\": [], \"val\": []},\n        \"predictions\": [],\n        \"ground_truth\": [],\n    },\n}\n\n\n# Training and evaluation function\ndef train_and_evaluate(\n    model, criterion, optimizer, train_loader, test_loader, num_epochs, seed, arm_name\n):\n    torch.manual_seed(seed)\n    np.random.seed(seed)\n    model.to(device)\n\n    for epoch in range(num_epochs):\n        model.train()\n        correct, total, train_loss = 0, 0, 0.0\n        for batch in train_loader:\n            inputs, targets = batch[0].to(device), batch[1].to(device)\n            optimizer.zero_grad()\n            outputs = model(inputs)\n            loss = criterion(outputs, targets)\n            loss.backward()\n            optimizer.step()\n            train_loss += loss.item()\n            _, predicted = outputs.max(1)\n            total += targets.size(0)\n            correct += predicted.eq(targets).sum().item()\n\n        # Evaluate on test set\n        model.eval()\n        correct_val, total_val, val_loss = 0, 0, 0.0\n        with torch.no_grad():\n            for batch in test_loader:\n                inputs, targets = batch[0].to(device), batch[1].to(device)\n                outputs = model(inputs)\n                loss = criterion(outputs, targets)\n                val_loss += loss.item()\n                _, predicted = outputs.max(1)\n                total_val += targets.size(0)\n                correct_val += predicted.eq(targets).sum().item()\n\n        # Calculate metrics\n        train_accuracy = 100.0 * correct / total\n        val_accuracy = 100.0 * correct_val / total_val\n        experiment_data[arm_name][\"metrics\"][\"train\"].append(train_accuracy)\n        experiment_data[arm_name][\"metrics\"][\"val\"].append(val_accuracy)\n        experiment_data[arm_name][\"losses\"][\"train\"].append(\n            train_loss / len(train_loader)\n        )\n        experiment_data[arm_name][\"losses\"][\"val\"].append(val_loss / len(test_loader))\n\n        # Print validation metrics\n        print(\n            f\"Epoch {epoch}: validation_loss = {val_loss / len(test_loader):.4f}, top-1 accuracy = {val_accuracy:.2f}\"\n        )\n\n\n# Baseline model (resnet18 without any modifications)\nfor seed in SEEDS:\n    model = resnet18(num_classes=10).to(device)\n    criterion = nn.CrossEntropyLoss()\n    optimizer = optim.SGD(\n        model.parameters(), lr=LR, momentum=0.9, weight_decay=0\n    )  # no weight decay (baseline)\n    train_and_evaluate(\n        model,\n        criterion,\n        optimizer,\n        train_loader,\n        test_loader,\n        NUM_EPOCHS,\n        seed,\n        \"no_regularization\",\n    )\n\n# Save experiment data\nnp.save(os.path.join(working_dir, \"experiment_data.npy\"), experiment_data)\n", "import os\nimport torch\nimport torch.nn as nn\nimport torch.optim as optim\nfrom torchvision import datasets, transforms, models\nfrom torch.utils.data import DataLoader, Subset\nimport numpy as np\nimport matplotlib.pyplot as plt\n\n# Directory setup\nworking_dir = os.path.join(os.getcwd(), \"working\")\nos.makedirs(working_dir, exist_ok=True)\n\n# Check for device\ndevice = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\nprint(f\"Using device: {device}\")\n\n# Experiment data to be saved\nexperiment_data = {\n    \"CIFAR-10\": {\n        \"metrics\": {\"train\": [], \"val\": []},\n        \"losses\": {\"train\": [], \"val\": []},\n        \"predictions\": [],\n        \"ground_truth\": [],\n    },\n}\n\n# Data transforms and load CIFAR-10 dataset\ntransform = transforms.Compose(\n    [\n        transforms.ToTensor(),\n        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),\n    ]\n)\ntrain_dataset = datasets.CIFAR10(\n    root=\"./data\", train=True, download=True, transform=transform\n)\ntest_dataset = datasets.CIFAR10(\n    root=\"./data\", train=False, download=True, transform=transform\n)\n\n# Fix the random seed and subset\nnp.random.seed(0)\nsubset_indices = np.random.choice(len(train_dataset), size=5000, replace=False)\ntrain_subset = Subset(train_dataset, subset_indices)\n\n# DataLoader setup\ntrain_loader = DataLoader(train_subset, batch_size=128, shuffle=True, num_workers=4)\ntest_loader = DataLoader(test_dataset, batch_size=128, shuffle=False, num_workers=4)\n\n\ndef train(model, optimizer, criterion, train_loader, device):\n    model.train()\n    running_loss = 0.0\n    correct = 0\n    total = 0\n\n    for batch in train_loader:\n        images, labels = batch\n        images, labels = images.to(device), labels.to(device)\n\n        optimizer.zero_grad()\n        outputs = model(images)\n        loss = criterion(outputs, labels)\n        loss.backward()\n        optimizer.step()\n\n        running_loss += loss.item() * labels.size(0)\n        _, predicted = outputs.max(1)\n        total += labels.size(0)\n        correct += predicted.eq(labels).sum().item()\n\n    avg_loss = running_loss / len(train_loader.dataset)\n    accuracy = 100.0 * correct / total\n    return avg_loss, accuracy\n\n\ndef validate(model, criterion, test_loader, device):\n    model.eval()\n    running_loss = 0.0\n    correct = 0\n    total = 0\n\n    with torch.no_grad():\n        for batch in test_loader:\n            images, labels = batch\n            images, labels = images.to(device), labels.to(device)\n\n            outputs = model(images)\n            loss = criterion(outputs, labels)\n\n            running_loss += loss.item() * labels.size(0)\n            _, predicted = outputs.max(1)\n            total += labels.size(0)\n            correct += predicted.eq(labels).sum().item()\n\n    avg_loss = running_loss / len(test_loader.dataset)\n    accuracy = 100.0 * correct / total\n    return avg_loss, accuracy\n\n\n# Models and settings for different regularizations\nconfigurations = {\n    \"no_regularization\": {},\n    \"dropout\": {\"dropout_p\": 0.3},\n    \"weight_decay\": {\"weight_decay\": 5e-4},\n    \"label_smoothing\": {\"label_smoothing\": 0.1},\n    \"randaugment\": {},  # RandAugment details would go here if used\n}\n\nfor config_name, config_params in configurations.items():\n    print(f\"Running configuration: {config_name}\")\n\n    for seed in range(3):  # Three seeds: 0, 1, 2\n        torch.manual_seed(seed)\n\n        model = models.resnet18(num_classes=10).to(device)\n\n        # Conditional settings based on configurations\n        if config_name == \"dropout\":\n            for module in model.modules():\n                if isinstance(module, nn.Dropout):\n                    module.p = config_params[\"dropout_p\"]\n\n        criterion = nn.CrossEntropyLoss().to(device)\n        optimizer = optim.SGD(\n            model.parameters(),\n            lr=0.1,\n            momentum=0.9,\n            weight_decay=config_params.get(\"weight_decay\", 0),\n        )\n\n        # Learning rate scheduler as cosine decay\n        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=30)\n\n        # Training and evaluation loops\n        for epoch in range(30):\n            train_loss, train_acc = train(\n                model, optimizer, criterion, train_loader, device\n            )\n            val_loss, val_acc = validate(model, criterion, test_loader, device)\n            scheduler.step()\n\n            print(\n                f\"Epoch {epoch}: training_loss = {train_loss:.4f}, training_accuracy = {train_acc:.2f}, validation_loss = {val_loss:.4f}, validation_accuracy = {val_acc:.2f}\"\n            )\n\n            experiment_data[\"CIFAR-10\"][\"metrics\"][\"train\"].append(train_acc)\n            experiment_data[\"CIFAR-10\"][\"losses\"][\"train\"].append(train_loss)\n            experiment_data[\"CIFAR-10\"][\"metrics\"][\"val\"].append(val_acc)\n            experiment_data[\"CIFAR-10\"][\"losses\"][\"val\"].append(val_loss)\n\n        print(\n            f\"Finished model trained with seed {seed} under configuration: {config_name}\\n\"\n        )\n\nnp.save(os.path.join(working_dir, \"experiment_data.npy\"), experiment_data)\n", "import os\nimport torch\nimport torch.nn as nn\nimport torch.optim as optim\nfrom torchvision import datasets, transforms, models\nfrom torch.utils.data import DataLoader, Subset\nimport numpy as np\nimport matplotlib.pyplot as plt\n\n# Directory setup\nworking_dir = os.path.join(os.getcwd(), \"working\")\nos.makedirs(working_dir, exist_ok=True)\n\n# Check for device\ndevice = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\nprint(f\"Using device: {device}\")\n\n# Experiment data to be saved\nexperiment_data = {\n    \"CIFAR-10\": {\n        \"metrics\": {\"train\": [], \"val\": []},\n        \"losses\": {\"train\": [], \"val\": []},\n        \"predictions\": [],\n        \"ground_truth\": [],\n    },\n}\n\n# Data transforms and load CIFAR-10 dataset\ntransform = transforms.Compose(\n    [\n        transforms.ToTensor(),\n        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),\n    ]\n)\n\n# Check and use local data path\ndata_path = \"./data\"\nif not os.path.exists(data_path):\n    raise RuntimeError(\n        \"Dataset directory not found. Ensure dataset is available locally.\"\n    )\n\ntrain_dataset = datasets.CIFAR10(\n    root=data_path, train=True, download=False, transform=transform\n)\ntest_dataset = datasets.CIFAR10(\n    root=data_path, train=False, download=False, transform=transform\n)\n\n# Fix the random seed and subset\nnp.random.seed(0)\nsubset_indices = np.random.choice(len(train_dataset), size=5000, replace=False)\ntrain_subset = Subset(train_dataset, subset_indices)\n\n# DataLoader setup\ntrain_loader = DataLoader(train_subset, batch_size=128, shuffle=True, num_workers=4)\ntest_loader = DataLoader(test_dataset, batch_size=128, shuffle=False, num_workers=4)\n\n\ndef train(model, optimizer, criterion, train_loader, device):\n    model.train()\n    running_loss = 0.0\n    correct = 0\n    total = 0\n\n    for batch in train_loader:\n        images, labels = batch\n        images, labels = images.to(device), labels.to(device)\n\n        optimizer.zero_grad()\n        outputs = model(images)\n        loss = criterion(outputs, labels)\n        loss.backward()\n        optimizer.step()\n\n        running_loss += loss.item() * labels.size(0)\n        _, predicted = outputs.max(1)\n        total += labels.size(0)\n        correct += predicted.eq(labels).sum().item()\n\n    avg_loss = running_loss / len(train_loader.dataset)\n    accuracy = 100.0 * correct / total\n    return avg_loss, accuracy\n\n\ndef validate(model, criterion, test_loader, device):\n    model.eval()\n    running_loss = 0.0\n    correct = 0\n    total = 0\n\n    with torch.no_grad():\n        for batch in test_loader:\n            images, labels = batch\n            images, labels = images.to(device), labels.to(device)\n\n            outputs = model(images)\n            loss = criterion(outputs, labels)\n\n            running_loss += loss.item() * labels.size(0)\n            _, predicted = outputs.max(1)\n            total += labels.size(0)\n            correct += predicted.eq(labels).sum().item()\n\n    avg_loss = running_loss / len(test_loader.dataset)\n    accuracy = 100.0 * correct / total\n    return avg_loss, accuracy\n\n\n# Models and settings for different regularizations\nconfigurations = {\n    \"no_regularization\": {},\n    \"dropout\": {\"dropout_p\": 0.3},\n    \"weight_decay\": {\"weight_decay\": 5e-4},\n    \"label_smoothing\": {\"label_smoothing\": 0.1},\n    \"randaugment\": {},  # RandAugment details would go here if used\n}\n\nfor config_name, config_params in configurations.items():\n    print(f\"Running configuration: {config_name}\")\n\n    for seed in range(3):  # Three seeds: 0, 1, 2\n        torch.manual_seed(seed)\n\n        model = models.resnet18(num_classes=10).to(device)\n\n        # Conditional settings based on configurations\n        if config_name == \"dropout\":\n            for module in model.modules():\n                if isinstance(module, nn.Dropout):\n                    module.p = config_params[\"dropout_p\"]\n\n        criterion = nn.CrossEntropyLoss().to(device)\n        optimizer = optim.SGD(\n            model.parameters(),\n            lr=0.1,\n            momentum=0.9,\n            weight_decay=config_params.get(\"weight_decay\", 0),\n        )\n\n        # Learning rate scheduler as cosine decay\n        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=30)\n\n        # Training and evaluation loops\n        for epoch in range(30):\n            train_loss, train_acc = train(\n                model, optimizer, criterion, train_loader, device\n            )\n            val_loss, val_acc = validate(model, criterion, test_loader, device)\n            scheduler.step()\n\n            print(\n                f\"Epoch {epoch}: training_loss = {train_loss:.4f}, training_accuracy = {train_acc:.2f}, validation_loss = {val_loss:.4f}, validation_accuracy = {val_acc:.2f}\"\n            )\n\n            experiment_data[\"CIFAR-10\"][\"metrics\"][\"train\"].append(train_acc)\n            experiment_data[\"CIFAR-10\"][\"losses\"][\"train\"].append(train_loss)\n            experiment_data[\"CIFAR-10\"][\"metrics\"][\"val\"].append(val_acc)\n            experiment_data[\"CIFAR-10\"][\"losses\"][\"val\"].append(val_loss)\n\n        print(\n            f\"Finished model trained with seed {seed} under configuration: {config_name}\\n\"\n        )\n\nnp.save(os.path.join(working_dir, \"experiment_data.npy\"), experiment_data)\n", "import os\nimport torch\nimport torch.nn as nn\nimport torch.optim as optim\nfrom torchvision import datasets, transforms, models\nfrom torch.utils.data import DataLoader, Subset\nimport numpy as np\n\n# Directory setup\nworking_dir = os.path.join(os.getcwd(), \"working\")\nos.makedirs(working_dir, exist_ok=True)\n\n# Check for device\ndevice = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\nprint(f\"Using device: {device}\")\n\n# Experiment data to be saved\nexperiment_data = {\n    \"CIFAR-10\": {\n        \"metrics\": {\"train\": [], \"val\": []},\n        \"losses\": {\"train\": [], \"val\": []},\n        \"predictions\": [],\n        \"ground_truth\": [],\n    },\n}\n\n# Data transforms and load CIFAR-10 dataset\ntransform = transforms.Compose(\n    [\n        transforms.ToTensor(),\n        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),\n    ]\n)\n\n# Ensure dataset can be downloaded\ndata_path = \"./data\"\n\ntrain_dataset = datasets.CIFAR10(\n    root=data_path, train=True, download=True, transform=transform\n)\ntest_dataset = datasets.CIFAR10(\n    root=data_path, train=False, download=True, transform=transform\n)\n\n# Fix the random seed and subset\nnp.random.seed(0)\nsubset_indices = np.random.choice(len(train_dataset), size=5000, replace=False)\ntrain_subset = Subset(train_dataset, subset_indices)\n\n# DataLoader setup\ntrain_loader = DataLoader(train_subset, batch_size=128, shuffle=True, num_workers=4)\ntest_loader = DataLoader(test_dataset, batch_size=128, shuffle=False, num_workers=4)\n\n\ndef train(model, optimizer, criterion, train_loader, device):\n    model.train()\n    running_loss = 0.0\n    correct = 0\n    total = 0\n\n    for batch in train_loader:\n        images, labels = batch\n        images, labels = images.to(device), labels.to(device)\n\n        optimizer.zero_grad()\n        outputs = model(images)\n        loss = criterion(outputs, labels)\n        loss.backward()\n        optimizer.step()\n\n        running_loss += loss.item() * labels.size(0)\n        _, predicted = outputs.max(1)\n        total += labels.size(0)\n        correct += predicted.eq(labels).sum().item()\n\n    avg_loss = running_loss / len(train_loader.dataset)\n    accuracy = 100.0 * correct / total\n    return avg_loss, accuracy\n\n\ndef validate(model, criterion, test_loader, device):\n    model.eval()\n    running_loss = 0.0\n    correct = 0\n    total = 0\n\n    with torch.no_grad():\n        for batch in test_loader:\n            images, labels = batch\n            images, labels = images.to(device), labels.to(device)\n\n            outputs = model(images)\n            loss = criterion(outputs, labels)\n\n            running_loss += loss.item() * labels.size(0)\n            _, predicted = outputs.max(1)\n            total += labels.size(0)\n            correct += predicted.eq(labels).sum().item()\n\n    avg_loss = running_loss / len(test_loader.dataset)\n    accuracy = 100.0 * correct / total\n    return avg_loss, accuracy\n\n\n# Models and settings for different regularizations\nconfigurations = {\n    \"no_regularization\": {},\n    \"dropout\": {\"dropout_p\": 0.3},\n    \"weight_decay\": {\"weight_decay\": 5e-4},\n    \"label_smoothing\": {\"label_smoothing\": 0.1},\n    \"randaugment\": {},  # RandAugment details would go here if used\n}\n\nfor config_name, config_params in configurations.items():\n    print(f\"Running configuration: {config_name}\")\n\n    for seed in range(3):  # Three seeds: 0, 1, 2\n        torch.manual_seed(seed)\n\n        model = models.resnet18(num_classes=10).to(device)\n\n        # Conditional settings based on configurations\n        if config_name == \"dropout\":\n            for module in model.modules():\n                if isinstance(module, nn.Dropout):\n                    module.p = config_params[\"dropout_p\"]\n\n        criterion = nn.CrossEntropyLoss().to(device)\n        optimizer = optim.SGD(\n            model.parameters(),\n            lr=0.1,\n            momentum=0.9,\n            weight_decay=config_params.get(\"weight_decay\", 0),\n        )\n\n        # Learning rate scheduler as cosine decay\n        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=30)\n\n        # Training and evaluation loops\n        for epoch in range(30):\n            train_loss, train_acc = train(\n                model, optimizer, criterion, train_loader, device\n            )\n            val_loss, val_acc = validate(model, criterion, test_loader, device)\n            scheduler.step()\n\n            print(\n                f\"Epoch {epoch}: training_loss = {train_loss:.4f}, training_accuracy = {train_acc:.2f}, validation_loss = {val_loss:.4f}, validation_accuracy = {val_acc:.2f}\"\n            )\n\n            experiment_data[\"CIFAR-10\"][\"metrics\"][\"train\"].append(train_acc)\n            experiment_data[\"CIFAR-10\"][\"losses\"][\"train\"].append(train_loss)\n            experiment_data[\"CIFAR-10\"][\"metrics\"][\"val\"].append(val_acc)\n            experiment_data[\"CIFAR-10\"][\"losses\"][\"val\"].append(val_loss)\n\n        print(\n            f\"Finished model trained with seed {seed} under configuration: {config_name}\\n\"\n        )\n\nnp.save(os.path.join(working_dir, \"experiment_data.npy\"), experiment_data)\n", "import os\nimport numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.optim as optim\nimport torchvision\nimport torchvision.transforms as transforms\nfrom torch.utils.data import Subset, DataLoader\nfrom torchvision.models import resnet18\nfrom sklearn.model_selection import train_test_split\n\n# Setup experiment environment\nworking_dir = os.path.join(os.getcwd(), \"working\")\nos.makedirs(working_dir, exist_ok=True)\ndevice = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\nprint(f\"Using device: {device}\")\n\n# Initialize experiment data storage\nexperiment_data = {\n    \"cifar10\": {\n        \"metrics\": {\"val\": []},\n        \"losses\": {\"train\": [], \"val\": []},\n        \"predictions\": [],\n        \"ground_truth\": [],\n    }\n}\n\n# Prepare CIFAR-10 data subset\ntransform = transforms.Compose(\n    [\n        transforms.ToTensor(),\n        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),\n    ]\n)\n\ntrain_dataset_full = torchvision.datasets.CIFAR10(\n    root=\"./data\", train=True, download=True, transform=transform\n)\ntrain_idx, _ = train_test_split(\n    range(len(train_dataset_full)),\n    train_size=5000,\n    stratify=train_dataset_full.targets,\n    random_state=0,\n)\ntrain_dataset = Subset(train_dataset_full, train_idx)\ntrain_loader = DataLoader(train_dataset, batch_size=128, shuffle=True, num_workers=2)\n\ntest_dataset = torchvision.datasets.CIFAR10(\n    root=\"./data\", train=False, download=True, transform=transform\n)\ntest_loader = DataLoader(test_dataset, batch_size=128, shuffle=False, num_workers=2)\n\n# Initialize the model\nmodel = resnet18(num_classes=10).to(device)\n\n# Define loss and optimizer\ncriterion = nn.CrossEntropyLoss()\noptimizer = optim.SGD(model.parameters(), lr=0.1, momentum=0.9, weight_decay=0)\n\n\n# Training function\ndef train():\n    model.train()\n    total_loss = 0\n    for batch in train_loader:\n        inputs, targets = batch[0].to(device), batch[1].to(device)\n        optimizer.zero_grad()\n        outputs = model(inputs)\n        loss = criterion(outputs, targets)\n        loss.backward()\n        optimizer.step()\n        total_loss += loss.item()\n\n    avg_loss = total_loss / len(train_loader)\n    experiment_data[\"cifar10\"][\"losses\"][\"train\"].append(avg_loss)\n    return avg_loss\n\n\n# Validation function\ndef validate():\n    model.eval()\n    total_loss, correct = 0, 0\n    with torch.no_grad():\n        for batch in test_loader:\n            inputs, targets = batch[0].to(device), batch[1].to(device)\n            outputs = model(inputs)\n            loss = criterion(outputs, targets)\n            total_loss += loss.item()\n            _, predicted = outputs.max(1)\n            correct += predicted.eq(targets).sum().item()\n\n    avg_loss = total_loss / len(test_loader)\n    accuracy = 100.0 * correct / len(test_loader.dataset)\n    experiment_data[\"cifar10\"][\"metrics\"][\"val\"].append(accuracy)\n    experiment_data[\"cifar10\"][\"losses\"][\"val\"].append(avg_loss)\n    return avg_loss, accuracy\n\n\n# Training loop\nbest_acc = 0\nfor epoch in range(30):\n    train_loss = train()\n    val_loss, val_acc = validate()\n\n    # Log results\n    print(\n        f\"Epoch {epoch+1}: train_loss = {train_loss:.4f}, val_loss = {val_loss:.4f}, val_acc = {val_acc:.2f}%\"\n    )\n\n# Save experiment data\nnp.save(os.path.join(working_dir, \"experiment_data.npy\"), experiment_data)\n", "import os\nimport torch\nimport torch.nn as nn\nimport torch.optim as optim\nimport numpy as np\nfrom torchvision import datasets, transforms, models\nfrom torch.utils.data import DataLoader, Subset\n\n# Set up working directory\nworking_dir = os.path.join(os.getcwd(), \"working\")\nos.makedirs(working_dir, exist_ok=True)\n\n# Device configuration\ndevice = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\nprint(f\"Using device: {device}\")\n\n# Define the transform for data normalization\ntransform = transforms.Compose(\n    [\n        transforms.ToTensor(),\n        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),\n    ]\n)\n\n# Load CIFAR-10 dataset\ntrain_set = datasets.CIFAR10(\n    root=\"./data\", train=True, download=True, transform=transform\n)\ntest_set = datasets.CIFAR10(\n    root=\"./data\", train=False, download=True, transform=transform\n)\n\n# Create a fixed training subset\ntrain_indices = np.arange(5000)  # Fixed 5000 images (500 per class with seed 0)\ntrain_subset = Subset(train_set, train_indices)\ntrain_loader = DataLoader(train_subset, batch_size=128, shuffle=True)\ntest_loader = DataLoader(test_set, batch_size=128, shuffle=False)\n\n# Define the model\nmodel = models.resnet18(num_classes=10).to(device)\n\n# Loss and optimizer\ncriterion = nn.CrossEntropyLoss()\noptimizer = optim.SGD(model.parameters(), lr=0.1, momentum=0.9)\n\n# Cosine Annealing Scheduler\nscheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=30, eta_min=0)\n\n\n# Training and Evaluation function\ndef train_and_evaluate(seed):\n    torch.manual_seed(seed)\n    np.random.seed(seed)\n    model.apply(\n        lambda m: m.reset_parameters() if hasattr(m, \"reset_parameters\") else None\n    )\n    model.to(device)\n\n    experiment_data = {\n        \"CIFAR10_baseline\": {\n            \"metrics\": {\"train\": [], \"val\": []},\n            \"losses\": {\"train\": [], \"val\": []},\n            \"predictions\": [],\n            \"ground_truth\": [],\n        },\n    }\n\n    for epoch in range(30):\n        model.train()\n        train_loss = 0.0\n        correct = 0\n        total = 0\n\n        for images, labels in train_loader:\n            images, labels = images.to(device), labels.to(device)\n            optimizer.zero_grad()\n\n            outputs = model(images)\n            loss = criterion(outputs, labels)\n            loss.backward()\n            optimizer.step()\n\n            train_loss += loss.item() * images.size(0)\n            _, predicted = outputs.max(1)\n            total += labels.size(0)\n            correct += predicted.eq(labels).sum().item()\n\n        train_accuracy = 100.0 * correct / total\n        experiment_data[\"CIFAR10_baseline\"][\"metrics\"][\"train\"].append(train_accuracy)\n        experiment_data[\"CIFAR10_baseline\"][\"losses\"][\"train\"].append(\n            train_loss / total\n        )\n\n        model.eval()\n        val_loss = 0.0\n        correct = 0\n        total = 0\n\n        with torch.no_grad():\n            for images, labels in test_loader:\n                images, labels = images.to(device), labels.to(device)\n                outputs = model(images)\n                loss = criterion(outputs, labels)\n                val_loss += loss.item() * images.size(0)\n                _, predicted = outputs.max(1)\n                total += labels.size(0)\n                correct += predicted.eq(labels).sum().item()\n\n        val_accuracy = 100.0 * correct / total\n        experiment_data[\"CIFAR10_baseline\"][\"metrics\"][\"val\"].append(val_accuracy)\n        experiment_data[\"CIFAR10_baseline\"][\"losses\"][\"val\"].append(val_loss / total)\n        print(f\"Epoch {epoch}: validation_loss = {val_loss / total:.4f}\")\n\n        scheduler.step()\n\n    np.save(\n        os.path.join(working_dir, f\"experiment_data_seed_{seed}.npy\"), experiment_data\n    )\n\n\n# Run experiments over 3 seeds\nfor seed in [0, 1, 2]:\n    train_and_evaluate(seed)\n", "import os\nimport numpy as np\nimport torch\nimport torchvision\nimport torchvision.transforms as transforms\nimport torch.nn as nn\nimport torch.optim as optim\nfrom torch.utils.data import Subset\nfrom torchvision.models import resnet18\n\n# Set working directory\nworking_dir = os.path.join(os.getcwd(), \"working\")\nos.makedirs(working_dir, exist_ok=True)\n\n# Set device\ndevice = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\nprint(f\"Using device: {device}\")\n\n# Experiment setup\nexperiment_data = {\n    \"cifar10\": {\n        \"metrics\": {\"test\": []},\n        \"losses\": {\"test\": []},\n        \"predictions\": [],\n        \"ground_truth\": [],\n        \"configs\": [],\n    }\n}\n\n# Hyperparameters\nnum_epochs = 30\nbatch_size = 128\nlearning_rate = 0.1\nnum_classes = 10\ntrain_subset_size = 5000\n\n# CIFAR-10 data setup\ntransform = transforms.Compose(\n    [\n        transforms.ToTensor(),\n        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),\n    ]\n)\n\n# Load CIFAR-10\nfull_trainset = torchvision.datasets.CIFAR10(\n    root=\"./data\", train=True, download=True, transform=transform\n)\ntestset = torchvision.datasets.CIFAR10(\n    root=\"./data\", train=False, download=True, transform=transform\n)\ntrain_subset = Subset(full_trainset, list(range(train_subset_size)))\ntrainloader = torch.utils.data.DataLoader(\n    train_subset, batch_size=batch_size, shuffle=True\n)\ntestloader = torch.utils.data.DataLoader(testset, batch_size=batch_size, shuffle=False)\n\n\n# Model setup\ndef train_and_evaluate(seed):\n    np.random.seed(seed)\n    torch.manual_seed(seed)\n\n    model = resnet18(num_classes=num_classes).to(device)\n    criterion = nn.CrossEntropyLoss()\n    optimizer = optim.SGD(\n        model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=5e-4\n    )\n    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epochs)\n\n    # Training Loop\n    for epoch in range(num_epochs):\n        model.train()\n        for batch in trainloader:\n            inputs, targets = batch\n            inputs, targets = inputs.to(device), targets.to(device)\n\n            optimizer.zero_grad()\n            outputs = model(inputs)\n            loss = criterion(outputs, targets)\n            loss.backward()\n            optimizer.step()\n        scheduler.step()\n\n        # Validation Loop\n        model.eval()\n        correct = 0\n        total = 0\n        test_loss = 0.0\n        with torch.no_grad():\n            for batch in testloader:\n                inputs, targets = batch\n                inputs, targets = inputs.to(device), targets.to(device)\n\n                outputs = model(inputs)\n                loss = criterion(outputs, targets)\n                test_loss += loss.item()\n                _, predicted = outputs.max(1)\n                total += targets.size(0)\n                correct += predicted.eq(targets).sum().item()\n\n        test_loss /= len(testloader)\n        accuracy = 100.0 * correct / total\n        print(\n            f\"Epoch {epoch}: validation_loss = {test_loss:.4f}, accuracy = {accuracy:.2f}%\"\n        )\n\n        # Save metrics and results\n        experiment_data[\"cifar10\"][\"metrics\"][\"test\"].append(accuracy)\n        experiment_data[\"cifar10\"][\"losses\"][\"test\"].append(test_loss)\n\n\n# Run experiments for different seeds\nfor seed in [0, 1, 2]:\n    train_and_evaluate(seed)\n\n# Save experiment data\nnp.save(os.path.join(working_dir, \"experiment_data.npy\"), experiment_data)\n", "import os\nimport torch\nimport torch.nn as nn\nimport torch.optim as optim\nimport numpy as np\nfrom torchvision import datasets, transforms, models\nfrom torch.utils.data import DataLoader, Subset\n\n# Set up working directory\nworking_dir = os.path.join(os.getcwd(), \"working\")\nos.makedirs(working_dir, exist_ok=True)\n\n# Device configuration\ndevice = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\nprint(f\"Using device: {device}\")\n\n# Define the transform for data normalization\ntransform = transforms.Compose(\n    [\n        transforms.ToTensor(),\n        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),\n    ]\n)\n\n# Load CIFAR-10 dataset from local directory\ntry:\n    train_set = datasets.CIFAR10(\n        root=\"./data\", train=True, download=False, transform=transform\n    )\n    test_set = datasets.CIFAR10(\n        root=\"./data\", train=False, download=False, transform=transform\n    )\nexcept RuntimeError as e:\n    print(\n        \"CIFAR-10 dataset not found in the specified directory. Please place the dataset in './data' and try again.\"\n    )\n    raise e\n\n# Create a fixed training subset\ntrain_indices = np.arange(5000)  # Fixed 5000 images (500 per class with seed 0)\ntrain_subset = Subset(train_set, train_indices)\ntrain_loader = DataLoader(train_subset, batch_size=128, shuffle=True)\ntest_loader = DataLoader(test_set, batch_size=128, shuffle=False)\n\n# Define the model\nmodel = models.resnet18(num_classes=10).to(device)\n\n# Loss and optimizer\ncriterion = nn.CrossEntropyLoss()\noptimizer = optim.SGD(model.parameters(), lr=0.1, momentum=0.9)\n\n# Cosine Annealing Scheduler\nscheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=30, eta_min=0)\n\n\n# Training and Evaluation function\ndef train_and_evaluate(seed):\n    torch.manual_seed(seed)\n    np.random.seed(seed)\n    model.apply(\n        lambda m: m.reset_parameters() if hasattr(m, \"reset_parameters\") else None\n    )\n    model.to(device)\n\n    experiment_data = {\n        \"CIFAR10_baseline\": {\n            \"metrics\": {\"train\": [], \"val\": []},\n            \"losses\": {\"train\": [], \"val\": []},\n            \"predictions\": [],\n            \"ground_truth\": [],\n        },\n    }\n\n    for epoch in range(30):\n        model.train()\n        train_loss = 0.0\n        correct = 0\n        total = 0\n\n        for images, labels in train_loader:\n            images, labels = images.to(device), labels.to(device)\n            optimizer.zero_grad()\n\n            outputs = model(images)\n            loss = criterion(outputs, labels)\n            loss.backward()\n            optimizer.step()\n\n            train_loss += loss.item() * images.size(0)\n            _, predicted = outputs.max(1)\n            total += labels.size(0)\n            correct += predicted.eq(labels).sum().item()\n\n        train_accuracy = 100.0 * correct / total\n        experiment_data[\"CIFAR10_baseline\"][\"metrics\"][\"train\"].append(train_accuracy)\n        experiment_data[\"CIFAR10_baseline\"][\"losses\"][\"train\"].append(\n            train_loss / total\n        )\n\n        model.eval()\n        val_loss = 0.0\n        correct = 0\n        total = 0\n\n        with torch.no_grad():\n            for images, labels in test_loader:\n                images, labels = images.to(device), labels.to(device)\n                outputs = model(images)\n                loss = criterion(outputs, labels)\n                val_loss += loss.item() * images.size(0)\n                _, predicted = outputs.max(1)\n                total += labels.size(0)\n                correct += predicted.eq(labels).sum().item()\n\n        val_accuracy = 100.0 * correct / total\n        experiment_data[\"CIFAR10_baseline\"][\"metrics\"][\"val\"].append(val_accuracy)\n        experiment_data[\"CIFAR10_baseline\"][\"losses\"][\"val\"].append(val_loss / total)\n        print(f\"Epoch {epoch}: validation_loss = {val_loss / total:.4f}\")\n\n        scheduler.step()\n\n    np.save(\n        os.path.join(working_dir, f\"experiment_data_seed_{seed}.npy\"), experiment_data\n    )\n\n\n# Run experiments over 3 seeds\nfor seed in [0, 1, 2]:\n    train_and_evaluate(seed)\n", "import os\nimport torch\nimport torch.nn as nn\nimport torch.optim as optim\nimport numpy as np\nfrom torchvision import datasets, transforms, models\nfrom torch.utils.data import DataLoader, Subset\n\n# Set up working directory\nworking_dir = os.path.join(os.getcwd(), \"working\")\nos.makedirs(working_dir, exist_ok=True)\n\n# Device configuration\ndevice = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\nprint(f\"Using device: {device}\")\n\n# Experiment data storage setup\nexperiment_data = {\n    \"cifar10\": {\n        \"metrics\": {\"train\": [], \"val\": []},\n        \"losses\": {\"train\": [], \"val\": []},\n        \"predictions\": [],\n        \"ground_truth\": [],\n    }\n}\n\n# Load CIFAR-10 dataset\ntransform = transforms.Compose(\n    [\n        transforms.ToTensor(),\n        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),\n    ]\n)\ntrain_full = datasets.CIFAR10(\n    root=\"./data\", train=True, download=True, transform=transform\n)\ntest_set = datasets.CIFAR10(\n    root=\"./data\", train=False, download=True, transform=transform\n)\n\n# Fixed subset of training data\nnum_samples_per_class = 500\nindices = []\nclass_counts = [0] * 10\n\nfor i, (_, label) in enumerate(train_full):\n    if class_counts[label] < num_samples_per_class:\n        indices.append(i)\n        class_counts[label] += 1\n\ntrain_set = Subset(train_full, indices)\ntrain_loader = DataLoader(train_set, batch_size=128, shuffle=True)\ntest_loader = DataLoader(test_set, batch_size=128, shuffle=False)\n\n# Define and initialize the ResNet18 model\nmodel = models.resnet18(num_classes=10)\nmodel.to(device)\n\n# Loss and optimizer\ncriterion = nn.CrossEntropyLoss()\noptimizer = optim.SGD(model.parameters(), lr=0.1, momentum=0.9, weight_decay=0.0)\nscheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=30)\n\n\n# Training loop\ndef train(model, loader, optimizer, criterion):\n    model.train()\n    running_loss = 0.0\n    correct = 0\n    total = 0\n    for batch in loader:\n        batch = {\n            k: v.to(device) for k, v in batch.items() if isinstance(v, torch.Tensor)\n        }\n        inputs, labels = batch\n        outputs = model(inputs)\n        loss = criterion(outputs, labels)\n        optimizer.zero_grad()\n        loss.backward()\n        optimizer.step()\n\n        running_loss += loss.item() * labels.size(0)\n        _, predicted = outputs.max(1)\n        correct += predicted.eq(labels).sum().item()\n        total += labels.size(0)\n\n    return running_loss / total, correct / total\n\n\n# Evaluation loop\ndef evaluate(model, loader, criterion):\n    model.eval()\n    running_loss = 0.0\n    correct = 0\n    total = 0\n    with torch.no_grad():\n        for batch in loader:\n            batch = {\n                k: v.to(device) for k, v in batch.items() if isinstance(v, torch.Tensor)\n            }\n            inputs, labels = batch\n            outputs = model(inputs)\n            loss = criterion(outputs, labels)\n            running_loss += loss.item() * labels.size(0)\n            _, predicted = outputs.max(1)\n            correct += predicted.eq(labels).sum().item()\n            total += labels.size(0)\n\n    return running_loss / total, correct / total\n\n\n# Training and evaluation across seeds\nseeds = [0, 1, 2]\ntest_accuracies = []\n\nfor seed in seeds:\n    torch.manual_seed(seed)\n    model.to(device)\n\n    for epoch in range(30):\n        train_loss, train_acc = train(model, train_loader, optimizer, criterion)\n        val_loss, val_acc = evaluate(model, test_loader, criterion)\n\n        # Print and save metrics\n        print(\n            f\"Epoch {epoch + 1}: validation_loss = {val_loss:.4f}, validation_accuracy = {val_acc:.4f}\"\n        )\n        experiment_data[\"cifar10\"][\"metrics\"][\"train\"].append(train_acc)\n        experiment_data[\"cifar10\"][\"metrics\"][\"val\"].append(val_acc)\n        scheduler.step()\n\n    test_accuracies.append(val_acc)\n\n# Save experiment data\nnp.save(os.path.join(working_dir, \"experiment_data.npy\"), experiment_data)\n\n# Calculate mean and std of test accuracies\nmean_test_accuracy = np.mean(test_accuracies)\nstd_test_accuracy = np.std(test_accuracies)\n\nprint(\n    f\"Average Top-1 Test Accuracy: {mean_test_accuracy:.4f} \u00b1 {std_test_accuracy:.4f}\"\n)\n", "import os\nimport numpy as np\nimport torch\nimport torchvision\nimport torchvision.transforms as transforms\nimport torch.nn as nn\nimport torch.optim as optim\nfrom torch.utils.data import Subset\nfrom torchvision.models import resnet18\n\n# Set working directory\nworking_dir = os.path.join(os.getcwd(), \"working\")\nos.makedirs(working_dir, exist_ok=True)\n\n# Set device\ndevice = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\nprint(f\"Using device: {device}\")\n\n# Experiment setup\nexperiment_data = {\n    \"cifar10\": {\n        \"metrics\": {\"test\": []},\n        \"losses\": {\"test\": []},\n        \"predictions\": [],\n        \"ground_truth\": [],\n        \"configs\": [],\n    }\n}\n\n# Hyperparameters\nnum_epochs = 30\nbatch_size = 128\nlearning_rate = 0.1\nnum_classes = 10\ntrain_subset_size = 5000\n\n# CIFAR-10 data setup\ntransform = transforms.Compose(\n    [\n        transforms.ToTensor(),\n        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),\n    ]\n)\n\n# Load CIFAR-10 from local files (pre-downloaded)\ndata_dir = \"./data/cifar10\"\nos.makedirs(data_dir, exist_ok=True)\nfull_trainset = torchvision.datasets.CIFAR10(\n    root=data_dir, train=True, download=False, transform=transform\n)\ntestset = torchvision.datasets.CIFAR10(\n    root=data_dir, train=False, download=False, transform=transform\n)\ntrain_subset = Subset(full_trainset, list(range(train_subset_size)))\ntrainloader = torch.utils.data.DataLoader(\n    train_subset, batch_size=batch_size, shuffle=True\n)\ntestloader = torch.utils.data.DataLoader(testset, batch_size=batch_size, shuffle=False)\n\n\n# Model setup\ndef train_and_evaluate(seed):\n    np.random.seed(seed)\n    torch.manual_seed(seed)\n\n    model = resnet18(num_classes=num_classes).to(device)\n    criterion = nn.CrossEntropyLoss()\n    optimizer = optim.SGD(\n        model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=5e-4\n    )\n    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epochs)\n\n    # Training Loop\n    for epoch in range(num_epochs):\n        model.train()\n        for batch in trainloader:\n            inputs, targets = batch\n            inputs, targets = inputs.to(device), targets.to(device)\n\n            optimizer.zero_grad()\n            outputs = model(inputs)\n            loss = criterion(outputs, targets)\n            loss.backward()\n            optimizer.step()\n        scheduler.step()\n\n        # Validation Loop\n        model.eval()\n        correct = 0\n        total = 0\n        test_loss = 0.0\n        with torch.no_grad():\n            for batch in testloader:\n                inputs, targets = batch\n                inputs, targets = inputs.to(device), targets.to(device)\n\n                outputs = model(inputs)\n                loss = criterion(outputs, targets)\n                test_loss += loss.item()\n                _, predicted = outputs.max(1)\n                total += targets.size(0)\n                correct += predicted.eq(targets).sum().item()\n\n        test_loss /= len(testloader)\n        accuracy = 100.0 * correct / total\n        print(\n            f\"Epoch {epoch}: validation_loss = {test_loss:.4f}, accuracy = {accuracy:.2f}%\"\n        )\n\n        # Save metrics and results\n        experiment_data[\"cifar10\"][\"metrics\"][\"test\"].append(accuracy)\n        experiment_data[\"cifar10\"][\"losses\"][\"test\"].append(test_loss)\n\n\n# Run experiments for different seeds\nfor seed in [0, 1, 2]:\n    train_and_evaluate(seed)\n\n# Save experiment data\nnp.save(os.path.join(working_dir, \"experiment_data.npy\"), experiment_data)\n"], "term_out": ["['Using device: cuda', '\\n', 'Traceback (most recent call last):\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 1348, in do_open\\n\nh.request(req.get_method(), req.selector, req.data, headers,\\n  File\n\"/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/http/client.py\",\nline 1323, in request\\n    self._send_request(method, url, body, headers,\nencode_chunked)\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 1369, in _send_request\\n\nself.endheaders(body, encode_chunked=encode_chunked)\\n  File\n\"/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/http/client.py\",\nline 1318, in endheaders\\n    self._send_output(message_body,\nencode_chunked=encode_chunked)\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 1078, in _send_output\\n\nself.send(msg)\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 1016, in send\\n\nself.connect()\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 1488, in connect\\n\nsuper().connect()\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 992, in connect\\n\nself._tunnel()\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 963, in _tunnel\\n\nraise OSError(f\"Tunnel connection failed: {code} {message.strip()}\")\\nOSError:\nTunnel connection failed: 403 Forbidden\\n\\nDuring handling of the above\nexception, another exception occurred:\\n\\nTraceback (most recent call last):\\n\nFile \"runfile.py\", line 31, in <module>\\n    train_dataset =\ntorchvision.datasets.CIFAR10(\\n\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/cifar.py\",\nline 66, in __init__\\n    self.download()\\n  File\n\"/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-\npackages/torchvision/datasets/cifar.py\", line 140, in download\\n\ndownload_and_extract_archive(self.url, self.root, filename=self.filename,\nmd5=self.tgz_md5)\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/utils.py\",\nline 395, in download_and_extract_archive\\n    download_url(url, download_root,\nfilename, md5)\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/utils.py\",\nline 122, in download_url\\n    url = _get_redirect_url(url,\nmax_hops=max_redirect_hops)\\n\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-\npackages/torchvision/datasets/utils.py\", line 66, in _get_redirect_url\\n    with\nurllib.request.urlopen(urllib.request.Request(url, headers=headers)) as\nresponse:\\n\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 216, in urlopen\\n\nreturn opener.open(url, data, timeout)\\n\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 519, in open\\n\nresponse = self._open(req, data)\\n               ^^^^^^^^^^^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 536, in _open\\n\nresult = self._call_chain(self.handle_open, protocol, protocol +\\n\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 496, in _call_chain\\n\nresult = func(*args)\\n             ^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 1391, in https_open\\n\nreturn self.do_open(http.client.HTTPSConnection, req,\\n\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 1351, in do_open\\n\nraise URLError(err)\\nurllib.error.URLError: <urlopen error Tunnel connection\nfailed: 403 Forbidden>\\n', 'Execution time: a second seconds (time limit is an\nhour).']", "['Using device: cuda', '\\n', 'Traceback (most recent call last):\\n  File\n\"runfile.py\", line 32, in <module>\\n    train_dataset =\ntorchvision.datasets.CIFAR10(\\n\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/cifar.py\",\nline 69, in __init__\\n    raise RuntimeError(\"Dataset not found or corrupted.\nYou can use download=True to download it\")\\nRuntimeError: Dataset not found or\ncorrupted. You can use download=True to download it\\n', 'Execution time: a\nsecond seconds (time limit is an hour).']", "['Using device: cuda', '\\n', 'Traceback (most recent call last):\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 1348, in do_open\\n\nh.request(req.get_method(), req.selector, req.data, headers,\\n  File\n\"/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/http/client.py\",\nline 1323, in request\\n    self._send_request(method, url, body, headers,\nencode_chunked)\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 1369, in _send_request\\n\nself.endheaders(body, encode_chunked=encode_chunked)\\n  File\n\"/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/http/client.py\",\nline 1318, in endheaders\\n    self._send_output(message_body,\nencode_chunked=encode_chunked)\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 1078, in _send_output\\n\nself.send(msg)\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 1016, in send\\n\nself.connect()\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 1488, in connect\\n\nsuper().connect()\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 992, in connect\\n\nself._tunnel()\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 963, in _tunnel\\n\nraise OSError(f\"Tunnel connection failed: {code} {message.strip()}\")\\nOSError:\nTunnel connection failed: 403 Forbidden\\n\\nDuring handling of the above\nexception, another exception occurred:\\n\\nTraceback (most recent call last):\\n\nFile \"runfile.py\", line 31, in <module>\\n    train_dataset =\ntorchvision.datasets.CIFAR10(\\n\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/cifar.py\",\nline 66, in __init__\\n    self.download()\\n  File\n\"/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-\npackages/torchvision/datasets/cifar.py\", line 140, in download\\n\ndownload_and_extract_archive(self.url, self.root, filename=self.filename,\nmd5=self.tgz_md5)\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/utils.py\",\nline 395, in download_and_extract_archive\\n    download_url(url, download_root,\nfilename, md5)\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/utils.py\",\nline 122, in download_url\\n    url = _get_redirect_url(url,\nmax_hops=max_redirect_hops)\\n\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-\npackages/torchvision/datasets/utils.py\", line 66, in _get_redirect_url\\n    with\nurllib.request.urlopen(urllib.request.Request(url, headers=headers)) as\nresponse:\\n\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 216, in urlopen\\n\nreturn opener.open(url, data, timeout)\\n\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 519, in open\\n\nresponse = self._open(req, data)\\n               ^^^^^^^^^^^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 536, in _open\\n\nresult = self._call_chain(self.handle_open, protocol, protocol +\\n\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 496, in _call_chain\\n\nresult = func(*args)\\n             ^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 1391, in https_open\\n\nreturn self.do_open(http.client.HTTPSConnection, req,\\n\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 1351, in do_open\\n\nraise URLError(err)\\nurllib.error.URLError: <urlopen error Tunnel connection\nfailed: 403 Forbidden>\\n', 'Execution time: a second seconds (time limit is an\nhour).']", "['Using device: cuda', '\\n', 'Traceback (most recent call last):\\n  File\n\"runfile.py\", line 36, in <module>\\n    raise\nFileNotFoundError(\\nFileNotFoundError: CIFAR-10 dataset is not available in\n\\'./data\\'. Please download it manually from\nhttps://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz and extract to\n\\'./data\\'.\\n', 'Execution time: a second seconds (time limit is an hour).']", "['Using device: cuda', '\\n', 'Traceback (most recent call last):\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 1348, in do_open\\n\nh.request(req.get_method(), req.selector, req.data, headers,\\n  File\n\"/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/http/client.py\",\nline 1323, in request\\n    self._send_request(method, url, body, headers,\nencode_chunked)\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 1369, in _send_request\\n\nself.endheaders(body, encode_chunked=encode_chunked)\\n  File\n\"/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/http/client.py\",\nline 1318, in endheaders\\n    self._send_output(message_body,\nencode_chunked=encode_chunked)\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 1078, in _send_output\\n\nself.send(msg)\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 1016, in send\\n\nself.connect()\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 1488, in connect\\n\nsuper().connect()\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 992, in connect\\n\nself._tunnel()\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 963, in _tunnel\\n\nraise OSError(f\"Tunnel connection failed: {code} {message.strip()}\")\\nOSError:\nTunnel connection failed: 403 Forbidden\\n\\nDuring handling of the above\nexception, another exception occurred:\\n\\nTraceback (most recent call last):\\n\nFile \"runfile.py\", line 34, in <module>\\n    train_dataset =\ntorchvision.datasets.CIFAR10(\\n\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/cifar.py\",\nline 66, in __init__\\n    self.download()\\n  File\n\"/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-\npackages/torchvision/datasets/cifar.py\", line 140, in download\\n\ndownload_and_extract_archive(self.url, self.root, filename=self.filename,\nmd5=self.tgz_md5)\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/utils.py\",\nline 395, in download_and_extract_archive\\n    download_url(url, download_root,\nfilename, md5)\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/utils.py\",\nline 122, in download_url\\n    url = _get_redirect_url(url,\nmax_hops=max_redirect_hops)\\n\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-\npackages/torchvision/datasets/utils.py\", line 66, in _get_redirect_url\\n    with\nurllib.request.urlopen(urllib.request.Request(url, headers=headers)) as\nresponse:\\n\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 216, in urlopen\\n\nreturn opener.open(url, data, timeout)\\n\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 519, in open\\n\nresponse = self._open(req, data)\\n               ^^^^^^^^^^^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 536, in _open\\n\nresult = self._call_chain(self.handle_open, protocol, protocol +\\n\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 496, in _call_chain\\n\nresult = func(*args)\\n             ^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 1391, in https_open\\n\nreturn self.do_open(http.client.HTTPSConnection, req,\\n\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 1351, in do_open\\n\nraise URLError(err)\\nurllib.error.URLError: <urlopen error Tunnel connection\nfailed: 403 Forbidden>\\n', 'Execution time: a second seconds (time limit is an\nhour).']", "['Using device: cuda', '\\n', 'Traceback (most recent call last):\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 1348, in do_open\\n\nh.request(req.get_method(), req.selector, req.data, headers,\\n  File\n\"/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/http/client.py\",\nline 1323, in request\\n    self._send_request(method, url, body, headers,\nencode_chunked)\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 1369, in _send_request\\n\nself.endheaders(body, encode_chunked=encode_chunked)\\n  File\n\"/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/http/client.py\",\nline 1318, in endheaders\\n    self._send_output(message_body,\nencode_chunked=encode_chunked)\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 1078, in _send_output\\n\nself.send(msg)\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 1016, in send\\n\nself.connect()\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 1488, in connect\\n\nsuper().connect()\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 992, in connect\\n\nself._tunnel()\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 963, in _tunnel\\n\nraise OSError(f\"Tunnel connection failed: {code} {message.strip()}\")\\nOSError:\nTunnel connection failed: 403 Forbidden\\n\\nDuring handling of the above\nexception, another exception occurred:\\n\\nTraceback (most recent call last):\\n\nFile \"runfile.py\", line 35, in <module>\\n    train_dataset = datasets.CIFAR10(\\n\n^^^^^^^^^^^^^^^^^\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/cifar.py\",\nline 66, in __init__\\n    self.download()\\n  File\n\"/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-\npackages/torchvision/datasets/cifar.py\", line 140, in download\\n\ndownload_and_extract_archive(self.url, self.root, filename=self.filename,\nmd5=self.tgz_md5)\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/utils.py\",\nline 395, in download_and_extract_archive\\n    download_url(url, download_root,\nfilename, md5)\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/utils.py\",\nline 122, in download_url\\n    url = _get_redirect_url(url,\nmax_hops=max_redirect_hops)\\n\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-\npackages/torchvision/datasets/utils.py\", line 66, in _get_redirect_url\\n    with\nurllib.request.urlopen(urllib.request.Request(url, headers=headers)) as\nresponse:\\n\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 216, in urlopen\\n\nreturn opener.open(url, data, timeout)\\n\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 519, in open\\n\nresponse = self._open(req, data)\\n               ^^^^^^^^^^^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 536, in _open\\n\nresult = self._call_chain(self.handle_open, protocol, protocol +\\n\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 496, in _call_chain\\n\nresult = func(*args)\\n             ^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 1391, in https_open\\n\nreturn self.do_open(http.client.HTTPSConnection, req,\\n\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 1351, in do_open\\n\nraise URLError(err)\\nurllib.error.URLError: <urlopen error Tunnel connection\nfailed: 403 Forbidden>\\n', 'Execution time: a second seconds (time limit is an\nhour).']", "['Using device: cuda', '\\n', 'Traceback (most recent call last):\\n  File\n\"runfile.py\", line 43, in <module>\\n    train_dataset = datasets.CIFAR10(\\n\n^^^^^^^^^^^^^^^^^\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/cifar.py\",\nline 69, in __init__\\n    raise RuntimeError(\"Dataset not found or corrupted.\nYou can use download=True to download it\")\\nRuntimeError: Dataset not found or\ncorrupted. You can use download=True to download it\\n', 'Execution time: a\nsecond seconds (time limit is an hour).']", "['Using device: cuda', '\\n', 'Traceback (most recent call last):\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 1348, in do_open\\n\nh.request(req.get_method(), req.selector, req.data, headers,\\n  File\n\"/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/http/client.py\",\nline 1323, in request\\n    self._send_request(method, url, body, headers,\nencode_chunked)\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 1369, in _send_request\\n\nself.endheaders(body, encode_chunked=encode_chunked)\\n  File\n\"/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/http/client.py\",\nline 1318, in endheaders\\n    self._send_output(message_body,\nencode_chunked=encode_chunked)\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 1078, in _send_output\\n\nself.send(msg)\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 1016, in send\\n\nself.connect()\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 1488, in connect\\n\nsuper().connect()\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 992, in connect\\n\nself._tunnel()\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 963, in _tunnel\\n\nraise OSError(f\"Tunnel connection failed: {code} {message.strip()}\")\\nOSError:\nTunnel connection failed: 403 Forbidden\\n\\nDuring handling of the above\nexception, another exception occurred:\\n\\nTraceback (most recent call last):\\n\nFile \"runfile.py\", line 38, in <module>\\n    train_dataset = datasets.CIFAR10(\\n\n^^^^^^^^^^^^^^^^^\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/cifar.py\",\nline 66, in __init__\\n    self.download()\\n  File\n\"/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-\npackages/torchvision/datasets/cifar.py\", line 140, in download\\n\ndownload_and_extract_archive(self.url, self.root, filename=self.filename,\nmd5=self.tgz_md5)\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/utils.py\",\nline 395, in download_and_extract_archive\\n    download_url(url, download_root,\nfilename, md5)\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/utils.py\",\nline 122, in download_url\\n    url = _get_redirect_url(url,\nmax_hops=max_redirect_hops)\\n\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-\npackages/torchvision/datasets/utils.py\", line 66, in _get_redirect_url\\n    with\nurllib.request.urlopen(urllib.request.Request(url, headers=headers)) as\nresponse:\\n\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 216, in urlopen\\n\nreturn opener.open(url, data, timeout)\\n\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 519, in open\\n\nresponse = self._open(req, data)\\n               ^^^^^^^^^^^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 536, in _open\\n\nresult = self._call_chain(self.handle_open, protocol, protocol +\\n\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 496, in _call_chain\\n\nresult = func(*args)\\n             ^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 1391, in https_open\\n\nreturn self.do_open(http.client.HTTPSConnection, req,\\n\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 1351, in do_open\\n\nraise URLError(err)\\nurllib.error.URLError: <urlopen error Tunnel connection\nfailed: 403 Forbidden>\\n', 'Execution time: a moment seconds (time limit is an\nhour).']", "['Traceback (most recent call last):\\n  File \"runfile.py\", line 10, in\n<module>\\n    from sklearn.model_selection import\ntrain_test_split\\nModuleNotFoundError: No module named \\'sklearn\\'\\n',\n'Execution time: a second seconds (time limit is an hour).']", "['Using device: cuda', '\\n', 'Traceback (most recent call last):\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 1348, in do_open\\n\nh.request(req.get_method(), req.selector, req.data, headers,\\n  File\n\"/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/http/client.py\",\nline 1323, in request\\n    self._send_request(method, url, body, headers,\nencode_chunked)\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 1369, in _send_request\\n\nself.endheaders(body, encode_chunked=encode_chunked)\\n  File\n\"/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/http/client.py\",\nline 1318, in endheaders\\n    self._send_output(message_body,\nencode_chunked=encode_chunked)\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 1078, in _send_output\\n\nself.send(msg)\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 1016, in send\\n\nself.connect()\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 1488, in connect\\n\nsuper().connect()\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 992, in connect\\n\nself._tunnel()\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 963, in _tunnel\\n\nraise OSError(f\"Tunnel connection failed: {code} {message.strip()}\")\\nOSError:\nTunnel connection failed: 403 Forbidden\\n\\nDuring handling of the above\nexception, another exception occurred:\\n\\nTraceback (most recent call last):\\n\nFile \"runfile.py\", line 26, in <module>\\n    train_set = datasets.CIFAR10(\\n\n^^^^^^^^^^^^^^^^^\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/cifar.py\",\nline 66, in __init__\\n    self.download()\\n  File\n\"/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-\npackages/torchvision/datasets/cifar.py\", line 140, in download\\n\ndownload_and_extract_archive(self.url, self.root, filename=self.filename,\nmd5=self.tgz_md5)\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/utils.py\",\nline 395, in download_and_extract_archive\\n    download_url(url, download_root,\nfilename, md5)\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/utils.py\",\nline 122, in download_url\\n    url = _get_redirect_url(url,\nmax_hops=max_redirect_hops)\\n\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-\npackages/torchvision/datasets/utils.py\", line 66, in _get_redirect_url\\n    with\nurllib.request.urlopen(urllib.request.Request(url, headers=headers)) as\nresponse:\\n\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 216, in urlopen\\n\nreturn opener.open(url, data, timeout)\\n\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 519, in open\\n\nresponse = self._open(req, data)\\n               ^^^^^^^^^^^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 536, in _open\\n\nresult = self._call_chain(self.handle_open, protocol, protocol +\\n\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 496, in _call_chain\\n\nresult = func(*args)\\n             ^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 1391, in https_open\\n\nreturn self.do_open(http.client.HTTPSConnection, req,\\n\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 1351, in do_open\\n\nraise URLError(err)\\nurllib.error.URLError: <urlopen error Tunnel connection\nfailed: 403 Forbidden>\\n', 'Execution time: a moment seconds (time limit is an\nhour).']", "['Using device: cuda', '\\n', 'Traceback (most recent call last):\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 1348, in do_open\\n\nh.request(req.get_method(), req.selector, req.data, headers,\\n  File\n\"/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/http/client.py\",\nline 1323, in request\\n    self._send_request(method, url, body, headers,\nencode_chunked)\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 1369, in _send_request\\n\nself.endheaders(body, encode_chunked=encode_chunked)\\n  File\n\"/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/http/client.py\",\nline 1318, in endheaders\\n    self._send_output(message_body,\nencode_chunked=encode_chunked)\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 1078, in _send_output\\n\nself.send(msg)\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 1016, in send\\n\nself.connect()\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 1488, in connect\\n\nsuper().connect()\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 992, in connect\\n\nself._tunnel()\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 963, in _tunnel\\n\nraise OSError(f\"Tunnel connection failed: {code} {message.strip()}\")\\nOSError:\nTunnel connection failed: 403 Forbidden\\n\\nDuring handling of the above\nexception, another exception occurred:\\n\\nTraceback (most recent call last):\\n\nFile \"runfile.py\", line 46, in <module>\\n    full_trainset =\ntorchvision.datasets.CIFAR10(\\n\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/cifar.py\",\nline 66, in __init__\\n    self.download()\\n  File\n\"/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-\npackages/torchvision/datasets/cifar.py\", line 140, in download\\n\ndownload_and_extract_archive(self.url, self.root, filename=self.filename,\nmd5=self.tgz_md5)\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/utils.py\",\nline 395, in download_and_extract_archive\\n    download_url(url, download_root,\nfilename, md5)\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/utils.py\",\nline 122, in download_url\\n    url = _get_redirect_url(url,\nmax_hops=max_redirect_hops)\\n\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-\npackages/torchvision/datasets/utils.py\", line 66, in _get_redirect_url\\n    with\nurllib.request.urlopen(urllib.request.Request(url, headers=headers)) as\nresponse:\\n\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 216, in urlopen\\n\nreturn opener.open(url, data, timeout)\\n\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 519, in open\\n\nresponse = self._open(req, data)\\n               ^^^^^^^^^^^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 536, in _open\\n\nresult = self._call_chain(self.handle_open, protocol, protocol +\\n\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 496, in _call_chain\\n\nresult = func(*args)\\n             ^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 1391, in https_open\\n\nreturn self.do_open(http.client.HTTPSConnection, req,\\n\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 1351, in do_open\\n\nraise URLError(err)\\nurllib.error.URLError: <urlopen error Tunnel connection\nfailed: 403 Forbidden>\\n', 'Execution time: a moment seconds (time limit is an\nhour).']", "['Using device: cuda', '\\n', \"CIFAR-10 dataset not found in the specified\ndirectory. Please place the dataset in './data' and try again.\", '\\n',\n'Traceback (most recent call last):\\n  File \"runfile.py\", line 37, in <module>\\n\nraise e\\n  File \"runfile.py\", line 27, in <module>\\n    train_set =\ndatasets.CIFAR10(\\n                ^^^^^^^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-\npackages/torchvision/datasets/cifar.py\", line 69, in __init__\\n    raise\nRuntimeError(\"Dataset not found or corrupted. You can use download=True to\ndownload it\")\\nRuntimeError: Dataset not found or corrupted. You can use\ndownload=True to download it\\n', 'Execution time: a second seconds (time limit\nis an hour).']", "['Using device: cuda', '\\n', 'Traceback (most recent call last):\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 1348, in do_open\\n\nh.request(req.get_method(), req.selector, req.data, headers,\\n  File\n\"/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/http/client.py\",\nline 1323, in request\\n    self._send_request(method, url, body, headers,\nencode_chunked)\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 1369, in _send_request\\n\nself.endheaders(body, encode_chunked=encode_chunked)\\n  File\n\"/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/http/client.py\",\nline 1318, in endheaders\\n    self._send_output(message_body,\nencode_chunked=encode_chunked)\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 1078, in _send_output\\n\nself.send(msg)\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 1016, in send\\n\nself.connect()\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 1488, in connect\\n\nsuper().connect()\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 992, in connect\\n\nself._tunnel()\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/http/client.py\", line 963, in _tunnel\\n\nraise OSError(f\"Tunnel connection failed: {code} {message.strip()}\")\\nOSError:\nTunnel connection failed: 403 Forbidden\\n\\nDuring handling of the above\nexception, another exception occurred:\\n\\nTraceback (most recent call last):\\n\nFile \"runfile.py\", line 34, in <module>\\n    train_full = datasets.CIFAR10(\\n\n^^^^^^^^^^^^^^^^^\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/cifar.py\",\nline 66, in __init__\\n    self.download()\\n  File\n\"/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-\npackages/torchvision/datasets/cifar.py\", line 140, in download\\n\ndownload_and_extract_archive(self.url, self.root, filename=self.filename,\nmd5=self.tgz_md5)\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/utils.py\",\nline 395, in download_and_extract_archive\\n    download_url(url, download_root,\nfilename, md5)\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/utils.py\",\nline 122, in download_url\\n    url = _get_redirect_url(url,\nmax_hops=max_redirect_hops)\\n\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-\npackages/torchvision/datasets/utils.py\", line 66, in _get_redirect_url\\n    with\nurllib.request.urlopen(urllib.request.Request(url, headers=headers)) as\nresponse:\\n\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 216, in urlopen\\n\nreturn opener.open(url, data, timeout)\\n\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 519, in open\\n\nresponse = self._open(req, data)\\n               ^^^^^^^^^^^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 536, in _open\\n\nresult = self._call_chain(self.handle_open, protocol, protocol +\\n\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 496, in _call_chain\\n\nresult = func(*args)\\n             ^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 1391, in https_open\\n\nreturn self.do_open(http.client.HTTPSConnection, req,\\n\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File\n\"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/urllib/request.py\", line 1351, in do_open\\n\nraise URLError(err)\\nurllib.error.URLError: <urlopen error Tunnel connection\nfailed: 403 Forbidden>\\n', 'Execution time: a second seconds (time limit is an\nhour).']", "['Using device: cuda', '\\n', 'Traceback (most recent call last):\\n  File\n\"runfile.py\", line 48, in <module>\\n    full_trainset =\ntorchvision.datasets.CIFAR10(\\n\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/scratch/network/cr7998/conda-\nenvs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/cifar.py\",\nline 69, in __init__\\n    raise RuntimeError(\"Dataset not found or corrupted.\nYou can use download=True to download it\")\\nRuntimeError: Dataset not found or\ncorrupted. You can use download=True to download it\\n', 'Execution time: a\nsecond seconds (time limit is an hour).']"], "analysis": ["The execution failed due to a network issue while attempting to download the\nCIFAR-10 dataset. The error message indicates a '403 Forbidden' response when\ntrying to establish a tunnel connection. This suggests that there may be network\nrestrictions or proxy settings that are preventing the dataset from being\ndownloaded. To fix this, ensure that the network allows access to the required\nURLs or consider downloading the dataset manually and placing it in the\nspecified directory ('./data').", "The execution failed due to a RuntimeError indicating that the CIFAR-10 dataset\nwas not found or corrupted. The code attempts to load the dataset without\ndownloading it, leading to the error. To fix this, set the parameter\n'download=True' in the torchvision.datasets.CIFAR10 constructor to automatically\ndownload the dataset if it is not present.", "The execution failed due to a network issue while attempting to download the\nCIFAR-10 dataset. The error message indicates a '403 Forbidden' response, which\nsuggests that the connection to the dataset server was blocked, possibly due to\nnetwork restrictions or proxy settings. To fix this, ensure that the environment\nhas proper internet access or consider downloading the dataset manually and\nplacing it in the expected directory ('./data'). Alternatively, check if there\nare proxy settings that need to be configured.", "The execution failed due to a FileNotFoundError because the CIFAR-10 dataset was\nnot found in the specified directory './data'. To fix this issue, the dataset\nneeds to be downloaded manually from\nhttps://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz and extracted to the\n'./data' directory.", "The execution failed due to a network issue when attempting to download the\nCIFAR-10 dataset. The error message indicates a '403 Forbidden' response when\ntrying to establish a tunnel connection. This is likely caused by network\nrestrictions or firewall settings blocking access to the external URL for\ndataset downloading. A potential fix is to manually download the CIFAR-10\ndataset from a browser or use a different network configuration that allows\naccess.", "The execution failed due to a network-related issue when trying to download the\nCIFAR-10 dataset. The error message indicates a '403 Forbidden' response, which\nlikely means that the script does not have permission to access the URL used for\ndownloading the dataset. To fix this, ensure that the machine has internet\naccess and the necessary permissions to download files. Alternatively, you can\nmanually download the CIFAR-10 dataset and place it in the expected directory\n('./data').", "The execution failed due to a RuntimeError indicating that the CIFAR-10 dataset\nwas not found or corrupted. The error suggests using the 'download=True' option\nto download the dataset. To fix this, update the dataset loading code to include\n'download=True' in the datasets.CIFAR10 instantiation.", "The execution failed due to a network-related error while attempting to download\nthe CIFAR-10 dataset. The error indicates a '403 Forbidden' response, which\nsuggests that the request to download the dataset was blocked, possibly due to\nnetwork restrictions or proxy settings. To fix this, ensure that the environment\nhas the correct permissions to access the internet or download the dataset\nmanually and provide the local path to the dataset.", "The execution failed due to a missing module: 'sklearn'. This indicates that the\n'scikit-learn' library is not installed in the environment. To fix this, you\nshould install the library using the command 'pip install scikit-learn'.", "The execution failed due to a network-related error while attempting to download\nthe CIFAR-10 dataset. The error message indicates a '403 Forbidden' response,\nsuggesting that the script is unable to access the URL for downloading the\ndataset, possibly due to network restrictions or firewall settings. To fix this,\nensure that the environment has the necessary permissions to access external\nURLs, or manually download the CIFAR-10 dataset and place it in the specified\ndirectory ('./data').", "The execution failed due to a network issue when attempting to download the\nCIFAR-10 dataset. The error message indicates a '403 Forbidden' response, which\nsuggests that the server is blocking the request, possibly due to network\nrestrictions or a proxy issue. To fix this, ensure that the environment has\naccess to the internet and that any necessary proxy settings are configured\ncorrectly. Alternatively, you can download the CIFAR-10 dataset manually and\nplace it in the expected directory ('./data') before running the code.", "The execution failed because the CIFAR-10 dataset was not found in the specified\ndirectory. The code attempts to load the dataset from './data' without\ndownloading it first. To fix this, set 'download=True' in the datasets.CIFAR10\ncall, which allows the code to download the dataset automatically if it is not\npresent.", "The execution failed due to a network-related issue when attempting to download\nthe CIFAR-10 dataset. The error message indicates a '403 Forbidden' response\nwhen trying to establish a tunnel connection. This is likely due to network\nrestrictions or firewall settings that prevent accessing external URLs. To fix\nthis, ensure that the environment has internet access or download the CIFAR-10\ndataset manually and provide the path to the local dataset in the code.", "The execution failed due to a missing CIFAR-10 dataset. The error message\nindicates that the dataset was not found or corrupted, and suggests using the\n'download=True' parameter to download it automatically. To fix this, the dataset\nloading line should be modified to include 'download=True'."], "exc_type": ["URLError", "RuntimeError", "URLError", "FileNotFoundError", "URLError", "URLError", "RuntimeError", "URLError", "ModuleNotFoundError", "URLError", "URLError", "RuntimeError", "URLError", "RuntimeError"], "exc_info": [{"args": ["Tunnel connection failed: 403 Forbidden"]}, {"args": ["Dataset not found or corrupted. You can use download=True to download it"]}, {"args": ["Tunnel connection failed: 403 Forbidden"]}, {"args": ["CIFAR-10 dataset is not available in './data'. Please download it manually from https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz and extract to './data'."]}, {"args": ["Tunnel connection failed: 403 Forbidden"]}, {"args": ["Tunnel connection failed: 403 Forbidden"]}, {"args": ["Dataset not found or corrupted. You can use download=True to download it"]}, {"args": ["Tunnel connection failed: 403 Forbidden"]}, {"args": ["No module named 'sklearn'"], "name": "sklearn", "msg": "No module named 'sklearn'"}, {"args": ["Tunnel connection failed: 403 Forbidden"]}, {"args": ["Tunnel connection failed: 403 Forbidden"]}, {"args": ["Dataset not found or corrupted. You can use download=True to download it"]}, {"args": ["Tunnel connection failed: 403 Forbidden"]}, {"args": ["Dataset not found or corrupted. You can use download=True to download it"]}], "exc_stack": [[["/scratch/network/cr7998/AI-Scientist-v2/ai_scientist/treesearch/interpreter.py", 144, "_run_session", "exec(compile(code, self.agent_file_name, \"exec\"), global_scope)"], ["runfile.py", 31, "<module>", "train_dataset = torchvision.datasets.CIFAR10("], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/cifar.py", 66, "__init__", "self.download()"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/cifar.py", 140, "download", "download_and_extract_archive(self.url, self.root, filename=self.filename, md5=self.tgz_md5)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/utils.py", 395, "download_and_extract_archive", "download_url(url, download_root, filename, md5)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/utils.py", 122, "download_url", "url = _get_redirect_url(url, max_hops=max_redirect_hops)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/utils.py", 66, "_get_redirect_url", "with urllib.request.urlopen(urllib.request.Request(url, headers=headers)) as response:"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 216, "urlopen", "return opener.open(url, data, timeout)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 519, "open", "response = self._open(req, data)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 536, "_open", "result = self._call_chain(self.handle_open, protocol, protocol +"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 496, "_call_chain", "result = func(*args)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 1391, "https_open", "return self.do_open(http.client.HTTPSConnection, req,"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 1351, "do_open", "raise URLError(err)"]], [["/scratch/network/cr7998/AI-Scientist-v2/ai_scientist/treesearch/interpreter.py", 144, "_run_session", "exec(compile(code, self.agent_file_name, \"exec\"), global_scope)"], ["runfile.py", 32, "<module>", "train_dataset = torchvision.datasets.CIFAR10("], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/cifar.py", 69, "__init__", "raise RuntimeError(\"Dataset not found or corrupted. You can use download=True to download it\")"]], [["/scratch/network/cr7998/AI-Scientist-v2/ai_scientist/treesearch/interpreter.py", 144, "_run_session", "exec(compile(code, self.agent_file_name, \"exec\"), global_scope)"], ["runfile.py", 31, "<module>", "train_dataset = torchvision.datasets.CIFAR10("], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/cifar.py", 66, "__init__", "self.download()"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/cifar.py", 140, "download", "download_and_extract_archive(self.url, self.root, filename=self.filename, md5=self.tgz_md5)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/utils.py", 395, "download_and_extract_archive", "download_url(url, download_root, filename, md5)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/utils.py", 122, "download_url", "url = _get_redirect_url(url, max_hops=max_redirect_hops)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/utils.py", 66, "_get_redirect_url", "with urllib.request.urlopen(urllib.request.Request(url, headers=headers)) as response:"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 216, "urlopen", "return opener.open(url, data, timeout)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 519, "open", "response = self._open(req, data)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 536, "_open", "result = self._call_chain(self.handle_open, protocol, protocol +"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 496, "_call_chain", "result = func(*args)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 1391, "https_open", "return self.do_open(http.client.HTTPSConnection, req,"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 1351, "do_open", "raise URLError(err)"]], [["/scratch/network/cr7998/AI-Scientist-v2/ai_scientist/treesearch/interpreter.py", 144, "_run_session", "exec(compile(code, self.agent_file_name, \"exec\"), global_scope)"], ["runfile.py", 36, "<module>", "raise FileNotFoundError("]], [["/scratch/network/cr7998/AI-Scientist-v2/ai_scientist/treesearch/interpreter.py", 144, "_run_session", "exec(compile(code, self.agent_file_name, \"exec\"), global_scope)"], ["runfile.py", 34, "<module>", "train_dataset = torchvision.datasets.CIFAR10("], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/cifar.py", 66, "__init__", "self.download()"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/cifar.py", 140, "download", "download_and_extract_archive(self.url, self.root, filename=self.filename, md5=self.tgz_md5)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/utils.py", 395, "download_and_extract_archive", "download_url(url, download_root, filename, md5)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/utils.py", 122, "download_url", "url = _get_redirect_url(url, max_hops=max_redirect_hops)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/utils.py", 66, "_get_redirect_url", "with urllib.request.urlopen(urllib.request.Request(url, headers=headers)) as response:"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 216, "urlopen", "return opener.open(url, data, timeout)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 519, "open", "response = self._open(req, data)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 536, "_open", "result = self._call_chain(self.handle_open, protocol, protocol +"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 496, "_call_chain", "result = func(*args)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 1391, "https_open", "return self.do_open(http.client.HTTPSConnection, req,"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 1351, "do_open", "raise URLError(err)"]], [["/scratch/network/cr7998/AI-Scientist-v2/ai_scientist/treesearch/interpreter.py", 144, "_run_session", "exec(compile(code, self.agent_file_name, \"exec\"), global_scope)"], ["runfile.py", 35, "<module>", "train_dataset = datasets.CIFAR10("], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/cifar.py", 66, "__init__", "self.download()"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/cifar.py", 140, "download", "download_and_extract_archive(self.url, self.root, filename=self.filename, md5=self.tgz_md5)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/utils.py", 395, "download_and_extract_archive", "download_url(url, download_root, filename, md5)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/utils.py", 122, "download_url", "url = _get_redirect_url(url, max_hops=max_redirect_hops)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/utils.py", 66, "_get_redirect_url", "with urllib.request.urlopen(urllib.request.Request(url, headers=headers)) as response:"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 216, "urlopen", "return opener.open(url, data, timeout)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 519, "open", "response = self._open(req, data)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 536, "_open", "result = self._call_chain(self.handle_open, protocol, protocol +"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 496, "_call_chain", "result = func(*args)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 1391, "https_open", "return self.do_open(http.client.HTTPSConnection, req,"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 1351, "do_open", "raise URLError(err)"]], [["/scratch/network/cr7998/AI-Scientist-v2/ai_scientist/treesearch/interpreter.py", 144, "_run_session", "exec(compile(code, self.agent_file_name, \"exec\"), global_scope)"], ["runfile.py", 43, "<module>", "train_dataset = datasets.CIFAR10("], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/cifar.py", 69, "__init__", "raise RuntimeError(\"Dataset not found or corrupted. You can use download=True to download it\")"]], [["/scratch/network/cr7998/AI-Scientist-v2/ai_scientist/treesearch/interpreter.py", 144, "_run_session", "exec(compile(code, self.agent_file_name, \"exec\"), global_scope)"], ["runfile.py", 38, "<module>", "train_dataset = datasets.CIFAR10("], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/cifar.py", 66, "__init__", "self.download()"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/cifar.py", 140, "download", "download_and_extract_archive(self.url, self.root, filename=self.filename, md5=self.tgz_md5)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/utils.py", 395, "download_and_extract_archive", "download_url(url, download_root, filename, md5)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/utils.py", 122, "download_url", "url = _get_redirect_url(url, max_hops=max_redirect_hops)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/utils.py", 66, "_get_redirect_url", "with urllib.request.urlopen(urllib.request.Request(url, headers=headers)) as response:"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 216, "urlopen", "return opener.open(url, data, timeout)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 519, "open", "response = self._open(req, data)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 536, "_open", "result = self._call_chain(self.handle_open, protocol, protocol +"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 496, "_call_chain", "result = func(*args)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 1391, "https_open", "return self.do_open(http.client.HTTPSConnection, req,"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 1351, "do_open", "raise URLError(err)"]], [["/scratch/network/cr7998/AI-Scientist-v2/ai_scientist/treesearch/interpreter.py", 144, "_run_session", "exec(compile(code, self.agent_file_name, \"exec\"), global_scope)"], ["runfile.py", 10, "<module>", "from sklearn.model_selection import train_test_split"]], [["/scratch/network/cr7998/AI-Scientist-v2/ai_scientist/treesearch/interpreter.py", 144, "_run_session", "exec(compile(code, self.agent_file_name, \"exec\"), global_scope)"], ["runfile.py", 26, "<module>", "train_set = datasets.CIFAR10("], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/cifar.py", 66, "__init__", "self.download()"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/cifar.py", 140, "download", "download_and_extract_archive(self.url, self.root, filename=self.filename, md5=self.tgz_md5)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/utils.py", 395, "download_and_extract_archive", "download_url(url, download_root, filename, md5)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/utils.py", 122, "download_url", "url = _get_redirect_url(url, max_hops=max_redirect_hops)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/utils.py", 66, "_get_redirect_url", "with urllib.request.urlopen(urllib.request.Request(url, headers=headers)) as response:"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 216, "urlopen", "return opener.open(url, data, timeout)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 519, "open", "response = self._open(req, data)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 536, "_open", "result = self._call_chain(self.handle_open, protocol, protocol +"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 496, "_call_chain", "result = func(*args)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 1391, "https_open", "return self.do_open(http.client.HTTPSConnection, req,"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 1351, "do_open", "raise URLError(err)"]], [["/scratch/network/cr7998/AI-Scientist-v2/ai_scientist/treesearch/interpreter.py", 144, "_run_session", "exec(compile(code, self.agent_file_name, \"exec\"), global_scope)"], ["runfile.py", 46, "<module>", "full_trainset = torchvision.datasets.CIFAR10("], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/cifar.py", 66, "__init__", "self.download()"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/cifar.py", 140, "download", "download_and_extract_archive(self.url, self.root, filename=self.filename, md5=self.tgz_md5)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/utils.py", 395, "download_and_extract_archive", "download_url(url, download_root, filename, md5)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/utils.py", 122, "download_url", "url = _get_redirect_url(url, max_hops=max_redirect_hops)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/utils.py", 66, "_get_redirect_url", "with urllib.request.urlopen(urllib.request.Request(url, headers=headers)) as response:"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 216, "urlopen", "return opener.open(url, data, timeout)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 519, "open", "response = self._open(req, data)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 536, "_open", "result = self._call_chain(self.handle_open, protocol, protocol +"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 496, "_call_chain", "result = func(*args)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 1391, "https_open", "return self.do_open(http.client.HTTPSConnection, req,"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 1351, "do_open", "raise URLError(err)"]], [["/scratch/network/cr7998/AI-Scientist-v2/ai_scientist/treesearch/interpreter.py", 144, "_run_session", "exec(compile(code, self.agent_file_name, \"exec\"), global_scope)"], ["runfile.py", 37, "<module>", "raise e"], ["runfile.py", 27, "<module>", "train_set = datasets.CIFAR10("], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/cifar.py", 69, "__init__", "raise RuntimeError(\"Dataset not found or corrupted. You can use download=True to download it\")"]], [["/scratch/network/cr7998/AI-Scientist-v2/ai_scientist/treesearch/interpreter.py", 144, "_run_session", "exec(compile(code, self.agent_file_name, \"exec\"), global_scope)"], ["runfile.py", 34, "<module>", "train_full = datasets.CIFAR10("], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/cifar.py", 66, "__init__", "self.download()"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/cifar.py", 140, "download", "download_and_extract_archive(self.url, self.root, filename=self.filename, md5=self.tgz_md5)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/utils.py", 395, "download_and_extract_archive", "download_url(url, download_root, filename, md5)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/utils.py", 122, "download_url", "url = _get_redirect_url(url, max_hops=max_redirect_hops)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/utils.py", 66, "_get_redirect_url", "with urllib.request.urlopen(urllib.request.Request(url, headers=headers)) as response:"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 216, "urlopen", "return opener.open(url, data, timeout)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 519, "open", "response = self._open(req, data)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 536, "_open", "result = self._call_chain(self.handle_open, protocol, protocol +"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 496, "_call_chain", "result = func(*args)"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 1391, "https_open", "return self.do_open(http.client.HTTPSConnection, req,"], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/urllib/request.py", 1351, "do_open", "raise URLError(err)"]], [["/scratch/network/cr7998/AI-Scientist-v2/ai_scientist/treesearch/interpreter.py", 144, "_run_session", "exec(compile(code, self.agent_file_name, \"exec\"), global_scope)"], ["runfile.py", 48, "<module>", "full_trainset = torchvision.datasets.CIFAR10("], ["/scratch/network/cr7998/conda-envs/ai_scientist/lib/python3.11/site-packages/torchvision/datasets/cifar.py", 69, "__init__", "raise RuntimeError(\"Dataset not found or corrupted. You can use download=True to download it\")"]]], "exp_name": "0-run", "metrics": [{"metric_names": [{"metric_name": "value", "lower_is_better": true, "description": "", "data": [{"dataset_name": "default", "final_value": null, "best_value": null}]}]}, {"metric_names": [{"metric_name": "value", "lower_is_better": true, "description": "", "data": [{"dataset_name": "default", "final_value": null, "best_value": null}]}]}, {"metric_names": [{"metric_name": "value", "lower_is_better": true, "description": "", "data": [{"dataset_name": "default", "final_value": null, "best_value": null}]}]}, {"metric_names": [{"metric_name": "value", "lower_is_better": true, "description": "", "data": [{"dataset_name": "default", "final_value": null, "best_value": null}]}]}, {"metric_names": [{"metric_name": "value", "lower_is_better": true, "description": "", "data": [{"dataset_name": "default", "final_value": null, "best_value": null}]}]}, {"metric_names": [{"metric_name": "value", "lower_is_better": true, "description": "", "data": [{"dataset_name": "default", "final_value": null, "best_value": null}]}]}, {"metric_names": [{"metric_name": "value", "lower_is_better": true, "description": "", "data": [{"dataset_name": "default", "final_value": null, "best_value": null}]}]}, {"metric_names": [{"metric_name": "value", "lower_is_better": true, "description": "", "data": [{"dataset_name": "default", "final_value": null, "best_value": null}]}]}, {"metric_names": [{"metric_name": "value", "lower_is_better": true, "description": "", "data": [{"dataset_name": "default", "final_value": null, "best_value": null}]}]}, {"metric_names": [{"metric_name": "value", "lower_is_better": true, "description": "", "data": [{"dataset_name": "default", "final_value": null, "best_value": null}]}]}, {"metric_names": [{"metric_name": "value", "lower_is_better": true, "description": "", "data": [{"dataset_name": "default", "final_value": null, "best_value": null}]}]}, {"metric_names": [{"metric_name": "value", "lower_is_better": true, "description": "", "data": [{"dataset_name": "default", "final_value": null, "best_value": null}]}]}, {"metric_names": [{"metric_name": "value", "lower_is_better": true, "description": "", "data": [{"dataset_name": "default", "final_value": null, "best_value": null}]}]}, {"metric_names": [{"metric_name": "value", "lower_is_better": true, "description": "", "data": [{"dataset_name": "default", "final_value": null, "best_value": null}]}]}], "is_best_node": [false, false, false, false, false, false, false, false, false, false, false, false, false, false], "plots": [[], [], [], [], [], [], [], [], [], [], [], [], [], []], "plot_paths": [[], [], [], [], [], [], [], [], [], [], [], [], [], []], "plot_analyses": [[], [], [], [], [], [], [], [], [], [], [], [], [], []], "vlm_feedback_summary": ["[]", "[]", "[]", "[]", "[]", "[]", "[]", "[]", "[]", "[]", "[]", "[]", "[]", "[]"], "exec_time": [1.0622506141662598, 1.094052791595459, 1.3333208560943604, 1.0984578132629395, 1.3553717136383057, 1.0946481227874756, 1.3260483741760254, 0.9060523509979248, 1.1351768970489502, 0.9122142791748047, 0.9094295501708984, 1.3635365962982178, 1.1454823017120361, 1.1559011936187744], "exec_time_feedback": ["", "", "", "", "", "", "", "", "", "", "", "", "", ""], "datasets_successfully_tested": [[], [], [], [], [], [], [], [], [], [], [], [], [], []], "plot_code": [null, null, null, null, null, null, null, null, null, null, null, null, null, null], "plot_plan": [null, null, null, null, null, null, null, null, null, null, null, null, null, null], "ablation_name": [null, null, null, null, null, null, null, null, null, null, null, null, null, null], "hyperparam_name": [null, null, null, null, null, null, null, null, null, null, null, null, null, null], "is_seed_node": [false, false, false, false, false, false, false, false, false, false, false, false, false, false], "is_seed_agg_node": [false, false, false, false, false, false, false, false, false, false, false, false, false, false], "parse_metrics_plan": ["", "", "", "", "", "", "", "", "", "", "", "", "", ""], "parse_metrics_code": ["", "", "", "", "", "", "", "", "", "", "", "", "", ""], "parse_term_out": ["", "", "", "", "", "", "", "", "", "", "", "", "", ""], "parse_exc_type": [null, null, null, null, null, null, null, null, null, null, null, null, null, null], "parse_exc_info": [null, null, null, null, null, null, null, null, null, null, null, null, null, null], "parse_exc_stack": [null, null, null, null, null, null, null, null, null, null, null, null, null, null], "completed_stages": ["Stage_1"], "current_stage": "Stage_1"};
+
+// Add log directory path and stage info to the tree data
+treeStructData.log_dir_path = window.location.pathname.split('/').slice(0, -1).join('/');
+treeStructData.current_stage = window.location.pathname.includes('stage_')
+  ? window.location.pathname.split('stage_')[1].split('/')[0]
+  : 'Stage_1';
+
+// Initialize background color
+window.bgColCurrent = bgCol;
+
+// Function to set background color that can be called from the console
+function setBackgroundColor(color) {
+  // Update the global color
+  updateBackgroundColor(color);
+
+  // Refresh the current sketch to apply the new background color
+  if (currentStage) {
+    startSketch(currentStage);
+  }
+}
+
+// Load all stage data and initialize the visualization
+loadAllStageData(treeStructData);
+
+    </script>
+    <title>AI Scientist-v2 Visualization</title>
+    <style>
+      body,
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        background-color: #ffffff;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      }
+      #canvas-container {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 40vw;
+        height: 100vh;
+        background-color: inherit;
+        padding-top: 40px;
+      }
+      canvas {
+        float: left;
+        height: 100vh;
+        width: 100vw;
+      }
+      #text-container {
+        float: right;
+        height: 100vh;
+        width: 50vw;
+        background-color: #282c34;
+        overflow: auto;
+      }
+      #plan {
+        /* border-left: 2px solid #282c34; */
+        background-color: #282c34;
+        color: #f2f0e7;
+        min-height: 5rem;
+        padding: 1em 0 1em 1em;
+      }
+      #plot_plan {
+        background-color: #282c34;
+        color: #f2f0e7;
+        min-height: 5rem;
+        padding: 1em 0 1em 1em;
+        white-space: pre-wrap;
+      }
+      #exec_time_feedback {
+        margin-top: 20px;
+        padding: 10px;
+        background-color: #282c34;
+        border-left: 3px solid #ff5555;
+        color: #f2f0e7;
+      }
+      #exec_time {
+        margin-top: 20px;
+        padding: 10px;
+        background-color: #282c34;
+        border-left: 3px solid #ff5555;
+        color: #f2f0e7;
+      }
+      #exc_info {
+        margin-top: 20px;
+        padding: 10px;
+        background-color: #2c1f1f;
+        border-left: 3px solid #ff5555;
+        color: #f2f0e7;
+      }
+      #metrics {
+        margin-top: 20px;
+        padding: 10px;
+        background-color: #282c34;
+        color: #f2f0e7;
+      }
+      #vlm_feedback {
+        margin-top: 20px;
+        padding: 10px;
+        background-color: #1f2c2f;
+        color: #f2f0e7;
+        border-left: 3px solid #55ff55;
+      }
+      #vlm_feedback p {
+        margin: 0.5em 0;
+        white-space: pre-wrap;
+      }
+      .datasets_successfully_tested {
+        margin-top: 20px;
+        padding: 10px;
+        background-color: #282c34;
+        color: #f2f0e7;
+        border-left: 3px solid #55ff55;
+      }
+      .plots-container {
+        float: right;
+        width: 50vw;
+        padding: 1rem;
+        background-color: #282c34;
+        margin-top: 1rem;
+      }
+
+      .plot-item {
+        flex: 1 1 300px;
+        max-width: 100%;
+        margin-bottom: 1rem;
+        white-space: pre-wrap;
+      }
+
+      .plot-item img {
+        width: 100%;
+        height: auto;
+        border-radius: 4px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        display: block;
+      }
+
+      .metric-group {
+        margin-bottom: 20px;
+        padding: 10px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+      }
+
+      .metric-table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 10px;
+      }
+
+      .metric-table th,
+      .metric-table td {
+        padding: 8px;
+        text-align: left;
+        border: 1px solid #ddd;
+      }
+
+      .metric-table th {
+        background-color: #363b44;
+      }
+
+      /* Styles for tabs */
+      .tabs-container {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 49vw;
+        background-color: #000000;
+        z-index: 10;
+        display: flex;
+        padding: 0;
+      }
+
+      .tab {
+        cursor: pointer;
+        padding: 10px 15px;
+        background-color: #333;
+        color: #f2f0e7;
+        border: none;
+        outline: none;
+        transition: background-color 0.3s;
+        flex: 1;
+        text-align: center;
+      }
+
+      .tab:hover {
+        background-color: #444;
+      }
+
+      .tab.active {
+        background-color: #4c76af;
+        font-weight: bold;
+      }
+
+      .tab.disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+        background-color: #282c34;
+      }
+
+      .tab-content {
+        display: none;
+        padding-top: 40px; /* Space for tabs */
+      }
+
+      .tab-content.active {
+        display: block;
+      }
+
+      .stage-info {
+        padding: 10px;
+        background-color: #282c34;
+        color: #f2f0e7;
+        margin-bottom: 10px;
+        font-size: 0.9em;
+      }
+
+      .stage-status {
+        display: inline-block;
+        padding: 3px 6px;
+        border-radius: 3px;
+        margin-left: 8px;
+        font-size: 0.8em;
+      }
+
+      .stage-status.completed {
+        background-color: #4caf50;
+      }
+
+      .stage-status.in-progress {
+        background-color: #2196f3;
+      }
+
+      .stage-status.not-started {
+        background-color: #9e9e9e;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="tabs-container" id="stage-tabs">
+      <button class="tab" data-stage="Stage_1" onclick="selectStage('Stage_1')">Stage 1</button>
+      <button class="tab" data-stage="Stage_2" onclick="selectStage('Stage_2')">Stage 2</button>
+      <button class="tab" data-stage="Stage_3" onclick="selectStage('Stage_3')">Stage 3</button>
+      <button class="tab" data-stage="Stage_4" onclick="selectStage('Stage_4')">Stage 4</button>
+    </div>
+
+    <div id="canvas-container"></div>
+
+    <pre id="text-container">
+        <div id="stage-info" class="stage-info"></div>
+        <div id="plan"></div>
+        <hr>
+        <div id="exc_info"></div>
+        <hr>
+        <div id="exec_time"></div>
+        <hr>
+        <div id="exec_time_feedback"></div>
+        <hr>
+        <div id="metrics"></div>
+        <hr>
+        <div id="plot_plan"></div>
+        <hr>
+        <div class="plots-container" id="plots"></div>
+        <hr>
+        <div id="vlm_feedback"></div>
+        <hr>
+        <div id="datasets_successfully_tested"></div>
+        <hr>
+        <code id="code" class="language-python"></code>
+        <hr>
+        <code id="plot_code" class="language-python"></code>
+    </pre>
+  </body>
+</html>
