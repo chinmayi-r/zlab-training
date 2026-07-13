@@ -5,7 +5,8 @@
 tutorial — train an unconditional **DDPM** from scratch on a small image dataset, generate
 samples, and document how the system works and what I observed.
 **Machine:** NVIDIA RTX 3060 Laptop GPU (6 GB), Windows 11, native Python 3.10 + torch 2.5.1+cu124.
-**Run date:** 2026-07-12. **Wall-clock:** ~29.5 min end-to-end (train + all sample grids).
+**Runs:** 64px/50-epoch (~29.5 min, Parts C–F) + a 128px/30-epoch follow-up and a DDIM
+fast-sampling study (Part G).
 
 > This is the *actual* run, not a scaffold — every number below comes from the console log
 > ([`ddpm-out/` samples](ddpm-out/) + [`loss_log.csv`](loss_log.csv)).
@@ -163,17 +164,63 @@ far more than training did.
   conda) to match native Windows; the training script and the Diffusers library are byte-for-
   byte the originals. The env delta is documented in Part C/E so the result is reproducible.
 - *"~30 min is slow for this."* ~2/3 of that is the six 1000-step sample grids, not training.
-  Switching the sampler to **DDIM** (e.g. 50 steps) would cut sampling ~20× with minor quality
-  loss — the obvious efficiency win, listed next.
+  **DDIM** cuts sampling ~9× (measured, Part G) — but naively (`eta=0`) it destroys quality on
+  a model this small; the working form is `eta=1.0`. That failure-and-fix is Part G.
 
 **Limitations.** Tiny model + few epochs + one dataset + one seed → a smoke-test, not a
 benchmark; no quantitative sample metric (visual + training loss only); sampling is slow by
 construction (full 1000-step DDPM).
 
 **Natural next steps** (ranked): (1) add an **FID** vs. the training set for a real number;
-(2) swap `DDPMScheduler`→`DDIMScheduler` for ~20× faster sampling; (3) push resolution to
-128px / more epochs now that VRAM headroom is confirmed; (4) try `huggan/flowers-102-categories`
-as a second dataset to test generality.
+(2) train the 128px model *longer* (its DDIM-`eta=0` collapse suggests it's undertrained — a
+better-trained model should tolerate deterministic few-step sampling); (3) try
+`huggan/flowers-102-categories` as a second dataset to test generality. *(Done this round,
+see Part G: 128px run + DDIM `eta` failure/fix.)*
+
+## Part G — Going further: 128px, and a real DDIM failure
+
+After the 64px run I pushed on two fronts you'd reach for next: **higher resolution** and
+**faster sampling**. Both taught something.
+
+### G.1 — 128px run (batch 8, 30 epochs)
+
+Same UNet, `image_size=128`, batch **8** (batch 16 OOMs: a 128px train step peaks at
+**5498 MiB**, ~all of the 6 GB card; batch 8 peaks at **2935 MiB**). ~4 min/epoch → ~2 h.
+Final loss ~0.018–0.021 ([`loss_log_128.csv`](loss_log_128.csv)). The full-DDPM samples are
+the **best of the whole report** — sharper wing venation and cleaner symmetry than 64px
+(side-by-side: [`resolution_compare.png`](resolution_compare.png), file
+[`ddpm128/samples_final.png`](ddpm128/samples_final.png)). The extra resolution paid off, at
+~4× the compute per epoch.
+
+### G.2 — DDIM fast sampling: the naive swap FAILS (and why)
+
+DDPM sampling is 1000 sequential UNet passes: **61.6 s** for a 16-image grid at 64px (clean,
+measured). DDIM (Song et al.) subsamples that chain, so the textbook move is "swap
+`DDPMScheduler`→`DDIMScheduler`, get ~10–20× speedup." **I did that and it broke** — see
+[`ddpm128/sampler_compare.png`](ddpm128/sampler_compare.png):
+
+| Sampler | 64px time | 128px result |
+|---|---|---|
+| DDPM, 1000 steps (stochastic) | 61.6 s | clean butterflies (reference quality) |
+| **DDIM, 100 steps, `eta=0`** (default, deterministic) | 6.7 s | **gray mush — total collapse** |
+| DDIM, **250** steps, `eta=0` | — | still gray mush (more steps ≠ fix) |
+| **DDIM, 100 steps, `eta=1.0`** (stochastic) | 6.7 s | **clean butterflies — recovered** ✅ |
+
+**Diagnosis.** I isolated it with a 4-arm sweep ([`diag_ddim.py`](diag_ddim.py)): changing
+timestep spacing (leading→trailing) did nothing; raising steps 100→250 did nothing; flipping
+**`eta` 0→1 fixed it completely**. So the variable is *determinism*. Deterministic DDIM
+(`eta=0`) follows a fixed ODE trajectory with no per-step noise, so this small, only-lightly-
+trained UNet's ε-prediction errors compound with nothing to correct them — the path drifts off
+the data manifold to a gray attractor (catastrophic at 128px, where the model is relatively
+less trained). Stochastic sampling (`eta=1.0`, or full DDPM) re-injects noise each step, which
+keeps samples on the manifold. **Result: `eta=1.0` DDIM gives DDPM-quality butterflies at
+~9× the speed** (6.7 s vs 61.6 s at 64px). The committed [`ddim_sample.py`](ddim_sample.py)
+now defaults to `eta=1.0` with a comment explaining the trap.
+
+**Why this matters (self-critique tie-in).** In Part F I'd listed "swap to DDIM" as an easy
+efficiency win. Running it proved that the *naive* form of that advice is wrong for a model
+this small — a good reminder that "standard trick" ≠ "free lunch," and exactly the kind of
+config-level failure Part A predicted for a library (vs an agent) workflow.
 
 ## References / reading
 

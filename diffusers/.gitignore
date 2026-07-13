@@ -6,3 +6,8 @@ ddpm-out/scheduler/
 ddpm-out/unet/
 *.out
 .venv/
+ddpm128/*.safetensors
+ddpm128/unet/
+ddpm128/scheduler/
+ddpm128/diag_*.png
+smoke*/
