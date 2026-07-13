@@ -1,0 +1,7 @@
+# local caches / large training artifacts — commit sample PNGs explicitly, not these
+hf_cache/
+ddpm-out/*.safetensors
+ddpm-out/**/*.safetensors
+ddpm-out/scheduler/
+ddpm-out/unet/
+*.out
