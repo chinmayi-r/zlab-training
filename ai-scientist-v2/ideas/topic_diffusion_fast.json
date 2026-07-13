@@ -1,0 +1,23 @@
+[
+    {
+        "Name": "diffusion_capacity_backfire_2d_fast",
+        "Title": "Does More Capacity Help? A Quick 2D-Diffusion Smoke Study on Toy Distributions",
+        "Short Hypothesis": "For a small DDPM on the classic 2D toy distributions (moons, circle, line) under a tiny fixed budget, adding model capacity (wider/deeper MLP) or more diffusion timesteps does NOT reliably lower the final denoising loss below a minimal baseline, and can match or underperform it.",
+        "Related Work": "The AI-Scientist 2d_diffusion template trains a small MLP denoiser (sinusoidal time+input embeddings) as a DDPM on low-dimensional toy datasets (moons, dino, line, circle). Scaling capacity is applied reflexively, but on very simple 2D distributions a minimal denoiser may already saturate, so extra capacity or steps may not help. This is a deliberately tiny, fast, fully self-contained smoke version to verify the pipeline end to end without any dataset download.",
+        "Abstract": "DATA (NO INTERNET, GENERATE IN CODE): do NOT download anything and do NOT use torchvision or huggingface. Build three 2D point datasets procedurally with numpy/sklearn, each with 4000 points, then standardize each to zero mean and unit std per dimension: (a) 'moons' via sklearn.datasets.make_moons(n_samples=4000, noise=0.1, random_state=0); (b) 'circle' via angles t=uniform(0,2pi), points=[cos t, sin t] plus Gaussian noise 0.05; (c) 'line' via x=uniform(-1,1), points=[x, x] plus Gaussian noise 0.05. There is no internet; everything must be generated locally. DEVICE: set device = 'cuda' if torch.cuda.is_available() else 'cpu' and move the model and every batch to device with .to(device); the model is tiny so CPU is acceptable, but use the GPU if present. DATALOADER (REQUIRED): if you use a torch.utils.data.DataLoader, set num_workers=0 (multi-worker loaders deadlock in this WSL environment); simple in-memory tensor batching is also fine. KEEP IT SMALL AND FAST: ONE seed (seed 0), batch size 256, 2000 training steps per run, DDPM with a linear beta schedule. ||| MODEL: a small MLP denoiser that predicts the added noise epsilon: sinusoidal embedding of the scalar timestep and a sinusoidal/linear embedding of the 2D input, concatenated, then a small MLP with residual blocks, output dim 2. STUDY: for EACH of the three datasets, compare THREE arms holding the training budget identical: (1) BASELINE = 1 residual block, hidden width 128, 100 diffusion timesteps; (2) BIGGER = 3 residual blocks, hidden width 256, 100 timesteps; (3) MORE-STEPS = 1 block, width 128, 200 timesteps. METRIC: the primary metric is the final denoising MSE loss, averaged over the last 100 training steps (lower is better), reported per dataset per arm. Also draw 1000 samples via the reverse diffusion process and make a 2D scatter of generated points overlaid on the real data. DELIVERABLE: a table of final loss with rows = {moons, circle, line} and columns = {baseline, bigger, more-steps}, plus a grid of the sample scatters; explicitly note which of the bigger / more-steps arms fail to beat the baseline loss.",
+        "Experiments": [
+            "Datasets (generated in code, NO download): moons (sklearn make_moons noise=0.1), circle (unit circle + noise 0.05), line (y=x + noise 0.05); 4000 pts each, standardized per-dim.",
+            "Model: small MLP denoiser predicting epsilon, sinusoidal time + input embeddings, residual MLP blocks, output dim 2.",
+            "DDPM: linear beta schedule; timesteps = 100 (baseline/bigger) or 200 (more-steps arm).",
+            "Budget (identical per arm): batch 256, 2000 steps, ONE seed (0), Adam optimizer.",
+            "Arms (3, run on EACH dataset): (1) baseline 1 block/width128/100 steps, (2) bigger 3 blocks/width256/100 steps, (3) more-steps 1 block/width128/200 steps.",
+            "Metric: final denoising MSE loss (avg of last 100 steps) per dataset per arm; lower is better.",
+            "Deliverable: 3x3 table of final loss + grid of generated-vs-real 2D scatters; flag arms that do not beat baseline."
+        ],
+        "Risk Factors and Limitations": [
+            "2000 steps and a single seed give noisy losses -- this is a fast smoke run, not a publication-grade result.",
+            "Final denoising MSE is only a proxy for sample quality; the scatter plots are the qualitative check.",
+            "Findings are specific to these three simple 2D distributions and this tiny MLP denoiser."
+        ]
+    }
+]
