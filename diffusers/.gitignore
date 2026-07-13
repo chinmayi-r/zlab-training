@@ -5,3 +5,4 @@ ddpm-out/**/*.safetensors
 ddpm-out/scheduler/
 ddpm-out/unet/
 *.out
+.venv/
