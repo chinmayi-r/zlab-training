@@ -11,3 +11,5 @@ ddpm128/unet/
 ddpm128/scheduler/
 ddpm128/diag_*.png
 smoke*/
+__pycache__/
+*.pyc
